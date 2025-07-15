@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TinySearch</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .search-result {
+            border-left: 3px solid #007bff;
+            padding-left: 15px;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        .search-result:hover {
+            background-color: #f8f9fa;
+        }
+        .score-badge {
+            font-size: 0.8rem;
+        }
+        .source-text {
+            font-size: 0.85rem;
+            color: #6c757d;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .sidebar {
+            border-right: 1px solid #dee2e6;
+            height: 100vh;
+            padding: 20px;
+        }
+        .file-upload {
+            margin-top: 20px;
+        }
+        .nav-tabs {
+            margin-bottom: 20px;
+        }
+        .api-key-form {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar -->
+            <div class="col-md-3 col-lg-2 d-md-block sidebar collapse bg-light">
+                <div class="position-sticky">
+                    <div id="status-indicator" class="alert alert-warning">
+                        Checking TinySearch status...
+                    </div>
+                    <p id="version-info" class="text-muted mb-4">Version: -</p>
+                    
+                    <div class="nav flex-column nav-pills" id="v-pills-tab" role="tablist">
+                        <button class="nav-link active" id="search-tab" data-bs-toggle="pill" data-bs-target="#search-content" type="button" role="tab" aria-selected="true">Search</button>
+                        <button class="nav-link" id="manage-tab" data-bs-toggle="pill" data-bs-target="#manage-content" type="button" role="tab" aria-selected="false">Index Management</button>
+                        <button class="nav-link" id="stats-tab" data-bs-toggle="pill" data-bs-target="#stats-content" type="button" role="tab" aria-selected="false">Statistics</button>
+                        <button class="nav-link" id="auth-tab" data-bs-toggle="pill" data-bs-target="#auth-content" type="button" role="tab" aria-selected="false">Authentication</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Main Content -->
+            <div class="col-md-9 col-lg-10 ms-sm-auto px-md-4 py-4">
+                <div class="tab-content" id="v-pills-tabContent">
+                    <!-- Search Tab -->
+                    <div class="tab-pane fade show active" id="search-content">
+                        <h2>Search</h2>
+                        <form id="search-form">
+                            <div class="mb-3">
+                                <input type="text" class="form-control form-control-lg" id="query" placeholder="Enter your search query..." required>
+                            </div>
+                            <div class="row mb-4">
+                                <div class="col-auto">
+                                    <label for="top-k" class="col-form-label">Results to show:</label>
+                                </div>
+                                <div class="col-auto">
+                                    <input type="number" class="form-control" id="top-k" value="5" min="1" max="50">
+                                </div>
+                                <div class="col">
+                                    <button type="submit" class="btn btn-primary">Search</button>
+                                </div>
+                            </div>
+                        </form>
+                        
+                        <div id="loading" class="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Searching...</p>
+                        </div>
+                        
+                        <div id="search-results">
+                            <!-- Results will appear here -->
+                        </div>
+                    </div>
+
+                    <!-- Index Management Tab -->
+                    <div class="tab-pane fade" id="manage-content">
+                        <h2>Index Management</h2>
+                        
+                        <!-- Upload Document -->
+                        <div class="card mb-4">
+                            <div class="card-header">Upload Document</div>
+                            <div class="card-body">
+                                <form id="upload-form" enctype="multipart/form-data">
+                                    <div class="mb-3">
+                                        <label for="document" class="form-label">Document File</label>
+                                        <input type="file" class="form-control" id="document" required>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">Upload & Index</button>
+                                </form>
+                                <div id="upload-status" class="mt-3"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- Build Index -->
+                        <div class="card mb-4">
+                            <div class="card-header">Build Index from Directory</div>
+                            <div class="card-body">
+                                <form id="build-form">
+                                    <div class="mb-3">
+                                        <label for="data-path" class="form-label">Directory Path</label>
+                                        <input type="text" class="form-control" id="data-path" placeholder="Path to data directory" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="extensions" class="form-label">File Extensions (comma-separated)</label>
+                                        <input type="text" class="form-control" id="extensions" placeholder="txt,md,pdf">
+                                    </div>
+                                    <div class="mb-3 form-check">
+                                        <input type="checkbox" class="form-check-input" id="recursive" checked>
+                                        <label class="form-check-label" for="recursive">Process subdirectories recursively</label>
+                                    </div>
+                                    <div class="mb-3 form-check">
+                                        <input type="checkbox" class="form-check-input" id="force-rebuild">
+                                        <label class="form-check-label" for="force-rebuild">Force rebuild (reprocess all files)</label>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">Build Index</button>
+                                </form>
+                                <div id="build-status" class="mt-3"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- Clear Index -->
+                        <div class="card">
+                            <div class="card-header">Clear Index</div>
+                            <div class="card-body">
+                                <p class="card-text">This will clear the entire index. This action cannot be undone.</p>
+                                <button id="clear-index-btn" class="btn btn-danger">Clear Index</button>
+                                <div id="clear-status" class="mt-3"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Statistics Tab -->
+                    <div class="tab-pane fade" id="stats-content">
+                        <h2>Index Statistics</h2>
+                        <button id="refresh-stats" class="btn btn-secondary mb-4">Refresh Statistics</button>
+                        
+                        <div id="stats-loading" class="loading">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading statistics...</p>
+                        </div>
+                        
+                        <div id="stats-display">
+                            <!-- Stats will appear here -->
+                        </div>
+                    </div>
+                    
+                    <!-- Authentication Tab -->
+                    <div class="tab-pane fade" id="auth-content">
+                        <h2>Authentication</h2>
+                        
+                        <!-- API Key Settings -->
+                        <div class="card mb-4">
+                            <div class="card-header">API Key</div>
+                            <div class="card-body">
+                                <p class="card-text">Enter your API key for authentication with the TinySearch API.</p>
+                                
+                                <form id="api-key-form" class="api-key-form">
+                                    <div class="mb-3">
+                                        <label for="api-key" class="form-label">API Key</label>
+                                        <input type="password" class="form-control" id="api-key" placeholder="Enter your API key">
+                                    </div>
+                                    <button type="button" id="save-api-key" class="btn btn-primary">Save API Key</button>
+                                    <button type="button" id="clear-api-key" class="btn btn-secondary">Clear API Key</button>
+                                </form>
+                                
+                                <div class="mt-4" id="api-key-status"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- Generate API Key -->
+                        <div class="card">
+                            <div class="card-header">Generate New API Key</div>
+                            <div class="card-body">
+                                <p class="card-text">Generate a new API key using your master key.</p>
+                                
+                                <form id="generate-key-form">
+                                    <div class="mb-3">
+                                        <label for="master-key" class="form-label">Master Key</label>
+                                        <input type="password" class="form-control" id="master-key" placeholder="Enter master key" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="expires-days" class="form-label">Expires In (Days)</label>
+                                        <input type="number" class="form-control" id="expires-days" value="30" min="1">
+                                        <div class="form-text">Leave empty for non-expiring keys</div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">Generate Key</button>
+                                </form>
+                                
+                                <div class="mt-4" id="generate-key-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check server status
+            checkHealth();
+            
+            // Set up event listeners
+            document.getElementById('search-form').addEventListener('submit', handleSearch);
+            document.getElementById('upload-form').addEventListener('submit', handleUpload);
+            document.getElementById('build-form').addEventListener('submit', handleBuild);
+            document.getElementById('clear-index-btn').addEventListener('click', handleClear);
+            document.getElementById('refresh-stats').addEventListener('click', loadStats);
+            document.getElementById('stats-tab').addEventListener('click', loadStats);
+            document.getElementById('save-api-key').addEventListener('click', saveApiKey);
+            document.getElementById('clear-api-key').addEventListener('click', clearApiKey);
+            document.getElementById('generate-key-form').addEventListener('submit', generateApiKey);
+            
+            // Load saved API key if available
+            loadSavedApiKey();
+        });
+        
+        // Get the API key from local storage or return null
+        function getApiKey() {
+            return localStorage.getItem('tinysearch_api_key');
+        }
+        
+        // Save API key to local storage
+        function saveApiKey() {
+            const apiKey = document.getElementById('api-key').value.trim();
+            if (apiKey) {
+                localStorage.setItem('tinysearch_api_key', apiKey);
+                document.getElementById('api-key-status').innerHTML = `
+                    <div class="alert alert-success">
+                        API key saved successfully
+                    </div>
+                `;
+            } else {
+                document.getElementById('api-key-status').innerHTML = `
+                    <div class="alert alert-warning">
+                        Please enter a valid API key
+                    </div>
+                `;
+            }
+        }
+        
+        // Clear API key from local storage
+        function clearApiKey() {
+            localStorage.removeItem('tinysearch_api_key');
+            document.getElementById('api-key').value = '';
+            document.getElementById('api-key-status').innerHTML = `
+                <div class="alert alert-info">
+                    API key cleared
+                </div>
+            `;
+        }
+        
+        // Load saved API key from local storage
+        function loadSavedApiKey() {
+            const apiKey = getApiKey();
+            if (apiKey) {
+                document.getElementById('api-key').value = apiKey;
+                document.getElementById('api-key-status').innerHTML = `
+                    <div class="alert alert-info">
+                        API key loaded from saved settings
+                    </div>
+                `;
+            }
+        }
+        
+        // Add API key to fetch options if available
+        function addApiKeyToOptions(options = {}) {
+            const apiKey = getApiKey();
+            if (!options.headers) {
+                options.headers = {};
+            }
+            
+            if (apiKey) {
+                options.headers['X-API-Key'] = apiKey;
+            }
+            
+            if (!options.headers['Content-Type'] && !options.body?.toString().includes('FormData')) {
+                options.headers['Content-Type'] = 'application/json';
+            }
+            
+            return options;
+        }
+        
+        async function checkHealth() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                const statusEl = document.getElementById('status-indicator');
+                const versionEl = document.getElementById('version-info');
+                
+                if (data.status === 'ok') {
+                    statusEl.className = 'alert alert-success';
+                    statusEl.textContent = 'TinySearch is ready';
+                } else {
+                    statusEl.className = 'alert alert-warning';
+                    statusEl.textContent = 'TinySearch is not initialized';
+                }
+                
+                versionEl.textContent = `Version: ${data.version}`;
+            } catch (error) {
+                const statusEl = document.getElementById('status-indicator');
+                statusEl.className = 'alert alert-danger';
+                statusEl.textContent = 'Could not connect to server';
+            }
+        }
+        
+        async function handleSearch(event) {
+            event.preventDefault();
+            
+            const query = document.getElementById('query').value;
+            const topK = document.getElementById('top-k').value;
+            
+            // Show loading indicator
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('search-results').innerHTML = '';
+            
+            try {
+                const options = addApiKeyToOptions({
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        top_k: parseInt(topK)
+                    }),
+                });
+                
+                const response = await fetch('/query', options);
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        throw new Error('Authentication failed. Please check your API key.');
+                    } else if (response.status === 429) {
+                        throw new Error('Rate limit exceeded. Please try again later.');
+                    } else {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                }
+                
+                const data = await response.json();
+                
+                // Hide loading indicator
+                document.getElementById('loading').style.display = 'none';
+                
+                // Display results
+                const resultsEl = document.getElementById('search-results');
+                
+                if (data.matches && data.matches.length > 0) {
+                    let html = '<h4>Search Results</h4>';
+                    
+                    data.matches.forEach((match, index) => {
+                        const score = Math.round(match.score * 100) / 100;
+                        const source = match.metadata && match.metadata.source ? match.metadata.source : 'Unknown source';
+                        
+                        html += `
+                            <div class="search-result">
+                                <div class="d-flex justify-content-between">
+                                    <h5>Result ${index + 1}</h5>
+                                    <span class="badge bg-primary score-badge">Score: ${score}</span>
+                                </div>
+                                <p class="source-text">Source: ${source}</p>
+                                <div class="text-body">${match.text}</div>
+                            </div>
+                        `;
+                    });
+                    
+                    resultsEl.innerHTML = html;
+                } else {
+                    resultsEl.innerHTML = '<div class="alert alert-warning">No results found</div>';
+                }
+            } catch (error) {
+                // Hide loading indicator
+                document.getElementById('loading').style.display = 'none';
+                
+                // Display error
+                document.getElementById('search-results').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function handleUpload(event) {
+            event.preventDefault();
+            
+            const fileInput = document.getElementById('document');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                document.getElementById('upload-status').innerHTML = `
+                    <div class="alert alert-warning">Please select a file</div>
+                `;
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Show status
+            document.getElementById('upload-status').innerHTML = `
+                <div class="alert alert-info">
+                    Uploading ${file.name}...
+                </div>
+            `;
+            
+            try {
+                const options = addApiKeyToOptions({
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const response = await fetch('/index/upload', options);
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        throw new Error('Authentication failed. Please check your API key.');
+                    } else if (response.status === 429) {
+                        throw new Error('Rate limit exceeded. Please try again later.');
+                    } else {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                }
+                
+                const data = await response.json();
+                
+                // Show result
+                document.getElementById('upload-status').innerHTML = `
+                    <div class="alert alert-success">
+                        ${data.message}
+                    </div>
+                `;
+                
+                // Clear file input
+                fileInput.value = '';
+                
+            } catch (error) {
+                document.getElementById('upload-status').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function handleBuild(event) {
+            event.preventDefault();
+            
+            const dataPath = document.getElementById('data-path').value;
+            const recursive = document.getElementById('recursive').checked;
+            const forceRebuild = document.getElementById('force-rebuild').checked;
+            const extensionsInput = document.getElementById('extensions').value;
+            
+            // Parse extensions
+            let extensions = null;
+            if (extensionsInput.trim()) {
+                extensions = extensionsInput.split(',').map(ext => ext.trim());
+            }
+            
+            // Show status
+            document.getElementById('build-status').innerHTML = `
+                <div class="alert alert-info">
+                    Building index from ${dataPath}...
+                </div>
+            `;
+            
+            try {
+                const options = addApiKeyToOptions({
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        data_path: dataPath,
+                        recursive: recursive,
+                        force_rebuild: forceRebuild,
+                        extensions: extensions
+                    }),
+                });
+                
+                const response = await fetch('/index/build', options);
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        throw new Error('Authentication failed. Please check your API key.');
+                    } else if (response.status === 429) {
+                        throw new Error('Rate limit exceeded. Please try again later.');
+                    } else {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                }
+                
+                const data = await response.json();
+                
+                // Show result
+                let html = `
+                    <div class="alert alert-success">
+                        ${data.message}
+                    </div>
+                `;
+                
+                if (data.processed_files && data.processed_files.length > 0) {
+                    html += `
+                        <div class="card mt-3">
+                            <div class="card-header">Processed Files</div>
+                            <ul class="list-group list-group-flush">
+                    `;
+                    
+                    data.processed_files.forEach(file => {
+                        html += `<li class="list-group-item">${file}</li>`;
+                    });
+                    
+                    html += `
+                            </ul>
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('build-status').innerHTML = html;
+            } catch (error) {
+                document.getElementById('build-status').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function handleClear(event) {
+            if (!confirm('Are you sure you want to clear the index? This cannot be undone.')) {
+                return;
+            }
+            
+            // Show status
+            document.getElementById('clear-status').innerHTML = `
+                <div class="alert alert-info">
+                    Clearing index...
+                </div>
+            `;
+            
+            try {
+                const options = addApiKeyToOptions({
+                    method: 'POST'
+                });
+                
+                const response = await fetch('/index/clear', options);
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        throw new Error('Authentication failed. Please check your API key.');
+                    } else if (response.status === 429) {
+                        throw new Error('Rate limit exceeded. Please try again later.');
+                    } else {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                }
+                
+                const data = await response.json();
+                
+                // Show result
+                document.getElementById('clear-status').innerHTML = `
+                    <div class="alert alert-success">
+                        ${data.message}
+                    </div>
+                `;
+                
+            } catch (error) {
+                document.getElementById('clear-status').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function loadStats() {
+            // Show loading indicator
+            document.getElementById('stats-loading').style.display = 'block';
+            document.getElementById('stats-display').innerHTML = '';
+            
+            try {
+                const options = addApiKeyToOptions({
+                    method: 'GET'
+                });
+                
+                const response = await fetch('/index/stats', options);
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        throw new Error('Authentication failed. Please check your API key.');
+                    } else if (response.status === 429) {
+                        throw new Error('Rate limit exceeded. Please try again later.');
+                    } else {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                }
+                
+                const data = await response.json();
+                
+                // Hide loading indicator
+                document.getElementById('stats-loading').style.display = 'none';
+                
+                // Display stats
+                const statsEl = document.getElementById('stats-display');
+                
+                if (data.stats) {
+                    let html = '';
+                    
+                    if (data.stats.total_documents !== undefined) {
+                        html += `
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title">Index Summary</h5>
+                                    <ul class="list-group list-group-flush">
+                                        <li class="list-group-item">Documents: ${data.stats.total_documents}</li>
+                                        <li class="list-group-item">Chunks: ${data.stats.total_chunks || 'Unknown'}</li>
+                                        <li class="list-group-item">Vector Dimension: ${data.stats.vector_dimension || 'Unknown'}</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    if (data.stats.processed_files && data.stats.processed_files.length > 0) {
+                        html += `
+                            <div class="card">
+                                <div class="card-body">
+                                    <h5 class="card-title">Processed Files</h5>
+                                    <p class="card-text">Total: ${data.stats.processed_files.length}</p>
+                                </div>
+                                <ul class="list-group list-group-flush">
+                        `;
+                        
+                        data.stats.processed_files.forEach(file => {
+                            html += `<li class="list-group-item">${file}</li>`;
+                        });
+                        
+                        html += `
+                                </ul>
+                            </div>
+                        `;
+                    }
+                    
+                    statsEl.innerHTML = html;
+                } else {
+                    statsEl.innerHTML = '<div class="alert alert-warning">No stats available</div>';
+                }
+            } catch (error) {
+                // Hide loading indicator
+                document.getElementById('stats-loading').style.display = 'none';
+                
+                // Display error
+                document.getElementById('stats-display').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        async function generateApiKey(event) {
+            event.preventDefault();
+            
+            const masterKey = document.getElementById('master-key').value;
+            const expiresDays = document.getElementById('expires-days').value;
+            
+            // Show status
+            document.getElementById('generate-key-status').innerHTML = `
+                <div class="alert alert-info">
+                    Generating new API key...
+                </div>
+            `;
+            
+            try {
+                const response = await fetch(`/api-key?expires_in_days=${expiresDays}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'master-key': masterKey
+                    }
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        throw new Error('Invalid master key.');
+                    } else {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                }
+                
+                const data = await response.json();
+                
+                // Show result with key and expiration
+                const expiresText = data.expires_at 
+                    ? `Expires: ${new Date(data.expires_at).toLocaleDateString()} ${new Date(data.expires_at).toLocaleTimeString()}`
+                    : 'Does not expire';
+                
+                document.getElementById('generate-key-status').innerHTML = `
+                    <div class="alert alert-success">
+                        <p>API Key generated successfully!</p>
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control" value="${data.api_key}" id="generated-key" readonly>
+                            <button class="btn btn-outline-secondary" type="button" onclick="copyApiKey()">Copy</button>
+                        </div>
+                        <p class="text-muted">${expiresText}</p>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('generate-key-status').innerHTML = `
+                    <div class="alert alert-danger">
+                        Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+        
+        function copyApiKey() {
+            const keyInput = document.getElementById('generated-key');
+            keyInput.select();
+            document.execCommand('copy');
+            
+            // Flash a "copied" message
+            const button = document.querySelector('#generate-key-status button');
+            const originalText = button.textContent;
+            button.textContent = 'Copied!';
+            setTimeout(() => {
+                button.textContent = originalText;
+            }, 2000);
+        }
+    </script>
+</body>
+</html> 

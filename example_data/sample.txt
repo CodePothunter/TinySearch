@@ -1,0 +1,4 @@
+TinySearch is a lightweight vector retrieval system.
+It is designed for easy integration and customization.
+The system uses embeddings to search for relevant information.
+You can use it for document retrieval and question answering.

@@ -1,0 +1,47 @@
+# TinySearch example configuration
+
+# Data adapter configuration
+adapter:
+  type: text  # Adapter type: text, pdf, csv, markdown, json, custom
+  params:
+    encoding: utf-8
+
+# Text splitter configuration
+splitter:
+  type: character
+  chunk_size: 300
+  chunk_overlap: 50
+  separator: "\n\n"
+  keep_separator: false
+  strip_whitespace: true
+
+# Embedding model configuration
+embedder:
+  type: huggingface
+  model: Qwen/Qwen-Embedding
+  device: cuda  # Set to "cpu" if no GPU is available
+  max_length: 512
+  batch_size: 8
+  normalize: true
+  cache_dir: ~/.cache/tinysearch/models
+
+# Vector indexer configuration
+indexer:
+  type: faiss
+  index_type: Flat  # Flat, IVF, HNSW
+  metric: cosine  # cosine, l2, ip
+  index_path: index.faiss
+  nlist: 100
+  nprobe: 10
+  use_gpu: false
+
+# Query engine configuration
+query_engine:
+  method: template
+  template: "请帮我查找：{query}"
+  top_k: 5
+
+# Flow controller configuration
+flow:
+  use_cache: true
+  cache_dir: .cache 

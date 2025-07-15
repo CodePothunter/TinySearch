@@ -1,0 +1,45 @@
+# TinySearch API Configuration Example with Authentication and Rate Limiting
+
+# Adapter configuration
+adapter:
+  type: text
+  params: {}
+
+# Splitter configuration
+splitter:
+  chunk_size: 300
+  chunk_overlap: 50
+
+# Embedder configuration
+embedder:
+  model: Qwen/Qwen-Embedding
+  device: cpu  # Use "cuda" for GPU support
+  params: {}
+
+# Indexer configuration
+indexer:
+  index_path: index.faiss
+  metric: cosine
+
+# Query engine configuration
+query_engine:
+  method: template
+  template: "请帮我查找：{query}"
+  top_k: 5
+
+# Flow controller configuration
+flow:
+  use_cache: true
+  cache_dir: .cache
+
+# API configuration
+api:
+  # Authentication settings
+  auth_enabled: true
+  default_key: "your-secure-api-key-here"  # Default API key for all endpoints
+  master_key: "your-master-key-here"  # Master key for creating new API keys
+  
+  # Rate limiting settings
+  rate_limit_enabled: true
+  rate_limit: 60  # Maximum number of requests
+  rate_limit_window: 60  # Time window in seconds 
