@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, Union, Callable
 import os
 import numpy as np
 from pathlib import Path
+from tqdm import tqdm
 
 from tinysearch.base import Embedder
 
@@ -95,15 +96,26 @@ class HuggingFaceEmbedder(Embedder):
                         }
                     except (ImportError, AttributeError):
                         pass
+                try:
+                    self._model = AutoModel.from_pretrained(
+                        self.model_name,
+                        cache_dir=self.cache_dir,
+                        **model_kwargs
+                    )
+                except Exception as e:
+                    print(f"Failed to load model with flash attention, trying normal attention")
+                    model_kwargs = {}
                 
                 self._model = AutoModel.from_pretrained(
                     self.model_name,
                     cache_dir=self.cache_dir,
                     **model_kwargs
                 )
+                print(f"Model loaded successfully")
                 
                 # Move model to device
                 self._model.to(self.device)
+                print(f"Model moved to device {self.device}")
                 
                 # Set to evaluation mode
                 self._model.eval()
@@ -213,7 +225,7 @@ class HuggingFaceEmbedder(Embedder):
             import torch
             
             with torch.no_grad():
-                for batch_idx, batch in enumerate(batches):
+                for batch_idx, batch in tqdm(enumerate(batches), total=total_batches, desc="Embedding texts"):
                     # Report progress
                     if self.progress_callback:
                         self.progress_callback(batch_idx + 1, total_batches)

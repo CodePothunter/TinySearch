@@ -17,11 +17,9 @@ def get_detailed_instruct(task_description: str, query: str) -> str:
 
 # --- Step 1: Extract text from files ---
 adapter = TextAdapter()
-data_dir = Path("example_data")
 texts = []
-for file_path in data_dir.glob("**/*.txt"):
-    file_texts = adapter.extract(file_path)
-    texts.extend(file_texts)
+file_texts = adapter.extract("example_data/sample.txt")
+texts.extend(file_texts)
 print(f"Extracted {len(texts)} text segments")
 
 # --- Step 2: Split text into chunks ---
