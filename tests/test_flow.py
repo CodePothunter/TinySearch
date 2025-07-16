@@ -11,6 +11,7 @@ from tinysearch.adapters.text import TextAdapter
 from tinysearch.splitters.character import CharacterTextSplitter
 from tinysearch.query.template import TemplateQueryEngine
 from tinysearch.flow.controller import FlowController
+from tinysearch.flow.hot_update import HotUpdateManager
 
 
 class MockEmbedder(Embedder):
@@ -222,3 +223,53 @@ class TestFlowController:
         assert "cache_enabled" in stats
         assert stats["cache_enabled"] is True
         assert stats["processed_files_count"] > 0 
+        
+    def test_hot_update_functionality(self, flow_controller, sample_data_dir):
+        """Test hot update functionality using the stub implementation"""
+        # Start hot update with the sample directory
+        flow_controller.start_hot_update(
+            watch_paths=[sample_data_dir],
+            file_extensions=[".txt"],
+            recursive=True
+        )
+        
+        # Verify hot update is active
+        assert flow_controller.is_hot_update_active()
+        
+        # Verify that the hot update manager is our stub implementation
+        assert isinstance(flow_controller._hot_update_manager, HotUpdateManager)
+        
+        # Stop hot update
+        flow_controller.stop_hot_update()
+        
+        # Verify hot update is inactive
+        assert not flow_controller.is_hot_update_active()
+        
+    def test_hot_update_manager_interactions(self, flow_controller, sample_data_dir):
+        """Test interactions with the hot update manager"""
+        # Start hot update with specific parameters
+        flow_controller.start_hot_update(
+            watch_paths=[sample_data_dir],
+            file_extensions=[".txt", ".md"],
+            process_delay=2.0,
+            recursive=False
+        )
+        
+        # Check if the hot update manager has the correct configuration
+        hot_update_manager = flow_controller._hot_update_manager
+        assert hot_update_manager is not None
+        assert isinstance(hot_update_manager, HotUpdateManager)
+        assert sample_data_dir in [str(p) for p in hot_update_manager.watch_paths]
+        assert ".txt" in hot_update_manager.file_extensions
+        assert ".md" in hot_update_manager.file_extensions
+        assert hot_update_manager.process_delay == 2.0
+        assert hot_update_manager.recursive is False
+        
+        # Test adding a watch path
+        new_path = Path(sample_data_dir) / "new_dir"
+        flow_controller.add_watch_path(new_path)
+        assert str(new_path) in hot_update_manager.watch_paths
+        
+        # Test removing a watch path
+        flow_controller.remove_watch_path(new_path)
+        assert str(new_path) not in hot_update_manager.watch_paths 

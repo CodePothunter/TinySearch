@@ -1,6 +1,7 @@
 """
 HuggingFace-based embedding model
 """
+import traceback
 from typing import List, Dict, Any, Optional, Union, Callable
 import os
 import numpy as np
@@ -16,13 +17,14 @@ class HuggingFaceEmbedder(Embedder):
     
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen-Embedding",
+        model_name: str = "Qwen/Qwen3-Embedding-0.6B",
         device: Optional[str] = None,
-        max_length: int = 512,
+        max_length: int = 8192,
         batch_size: int = 8,
         normalize_embeddings: bool = True,
         cache_dir: Optional[str] = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        pooling: str = "last_token"
     ):
         """
         Initialize the HuggingFace embedder
@@ -37,6 +39,8 @@ class HuggingFaceEmbedder(Embedder):
             cache_dir: Directory to cache downloaded models
             progress_callback: Optional callback function to report progress
                               Args: (current_batch, total_batches)
+            pooling: Pooling method to use ("last_token", "mean", "cls")
+                     For Qwen3-Embedding models, "last_token" is recommended
         """
         self.model_name = model_name
         self.max_length = max_length
@@ -44,6 +48,7 @@ class HuggingFaceEmbedder(Embedder):
         self.normalize_embeddings = normalize_embeddings
         self.cache_dir = cache_dir
         self.progress_callback = progress_callback
+        self.pooling = pooling
         
         # Set device
         if device is None:
@@ -69,16 +74,32 @@ class HuggingFaceEmbedder(Embedder):
             try:
                 from transformers import AutoModel, AutoTokenizer
                 
+                # Set padding side to 'left' for Qwen3 models to improve performance
+                padding_side = "left" if "Qwen3" in self.model_name else "right"
+                
                 # Load tokenizer
                 self._tokenizer = AutoTokenizer.from_pretrained(
                     self.model_name,
-                    cache_dir=self.cache_dir
+                    cache_dir=self.cache_dir,
+                    padding_side=padding_side
                 )
                 
-                # Load model
+                # Load model - use flash attention for Qwen3 models if available
+                model_kwargs = {}
+                if "Qwen3" in self.model_name:
+                    try:
+                        import torch
+                        model_kwargs = {
+                            "attn_implementation": "flash_attention_2", 
+                            "torch_dtype": torch.float16
+                        }
+                    except (ImportError, AttributeError):
+                        pass
+                
                 self._model = AutoModel.from_pretrained(
                     self.model_name,
-                    cache_dir=self.cache_dir
+                    cache_dir=self.cache_dir,
+                    **model_kwargs
                 )
                 
                 # Move model to device
@@ -89,6 +110,7 @@ class HuggingFaceEmbedder(Embedder):
                 
                 self._initialized = True
             except ImportError:
+                print(traceback.format_exc())
                 raise ImportError(
                     "Could not import transformers. "
                     "Please install it with: pip install transformers"
@@ -131,6 +153,9 @@ class HuggingFaceEmbedder(Embedder):
             # Fallback dimensions for common embedding models
             model_dimensions = {
                 "Qwen/Qwen-Embedding": 1536,
+                "Qwen/Qwen3-Embedding-0.6B": 1024,
+                "Qwen/Qwen3-Embedding-4B": 2560,
+                "Qwen/Qwen3-Embedding-8B": 4096,
                 "sentence-transformers/all-mpnet-base-v2": 768,
                 "sentence-transformers/all-MiniLM-L6-v2": 384
             }
@@ -141,6 +166,28 @@ class HuggingFaceEmbedder(Embedder):
             
             # Default fallback
             return 768
+    
+    def _last_token_pool(self, last_hidden_states, attention_mask):
+        """
+        Extract embeddings from the last token (recommended for Qwen3 models)
+        
+        Args:
+            last_hidden_states: Hidden states from the model
+            attention_mask: Attention mask
+            
+        Returns:
+            Tensor containing the embeddings
+        """
+        import torch
+        # Check if left padding (common in Qwen3 models)
+        left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+        if left_padding:
+            return last_hidden_states[:, -1]
+        else:
+            # For right padding, find the last non-padding token for each sequence
+            sequence_lengths = attention_mask.sum(dim=1) - 1
+            batch_size = last_hidden_states.shape[0]
+            return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         """
@@ -186,13 +233,14 @@ class HuggingFaceEmbedder(Embedder):
                     # Get model output
                     outputs = self._model(**inputs) # type: ignore
                     
-                    # Get embeddings (use [CLS] token or mean pooling)
-                    # This varies by model architecture
-                    try:
-                        # First try to get sentence embeddings directly (for sentence transformers)
-                        embeddings = outputs.pooler_output
-                    except AttributeError:
-                        # Use mean pooling over token embeddings as fallback
+                    # Get embeddings based on pooling method
+                    if self.pooling == "last_token" or "Qwen3" in self.model_name:
+                        embeddings = self._last_token_pool(outputs.last_hidden_state, inputs["attention_mask"])
+                    elif self.pooling == "cls":
+                        # Use [CLS] token (first token)
+                        embeddings = outputs.last_hidden_state[:, 0]
+                    elif self.pooling == "mean" or True:  # Default to mean pooling as fallback
+                        # Use mean pooling over token embeddings
                         token_embeddings = outputs.last_hidden_state
                         attention_mask = inputs["attention_mask"]
                         
