@@ -44,7 +44,7 @@ class FileChangeHandler:
         self.pending_deletions = set()
         
         logger.warning("Using stub FileChangeHandler without watchdog functionality")
-
+        
 # Stub implementation for tests
 class HotUpdateManager:
     """

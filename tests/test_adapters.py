@@ -92,13 +92,13 @@ def test_text_adapter_encoding():
         assert len(texts_utf8) == 1
         assert texts_utf8[0] == content
         
-        # Try with incorrect encoding (should not match)
-        adapter_ascii = TextAdapter(encoding="ascii")
+        # Create a TextAdapter with errors='replace' to handle non-ASCII characters
+        adapter_ascii = TextAdapter(encoding="ascii", errors="replace")
         
-        # This should not raise an error but might not decode correctly
+        # This should not raise an error, but should replace non-ASCII characters
         texts_ascii = adapter_ascii.extract(filepath)
         assert len(texts_ascii) == 1
-        assert texts_ascii[0] != content
+        assert texts_ascii[0] != content  # The content should be different due to replacements
     
     finally:
         # Clean up

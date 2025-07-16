@@ -266,7 +266,8 @@ class FlowController(FlowControllerBase):
             Dictionary with statistics
         """
         stats = {
-            "processed_files": len(self.processed_files),
+            "processed_files_count": len(self.processed_files),
+            "cache_enabled": self.use_cache,
             "index": {}
         }
         
@@ -325,3 +326,28 @@ class FlowController(FlowControllerBase):
             True if hot update is active
         """
         return self._hot_update_manager is not None and self._hot_update_manager.is_watching() 
+        
+    def add_watch_path(self, path: Union[str, Path], recursive: Optional[bool] = None) -> None:
+        """
+        Add a path to watch for file changes
+        
+        Args:
+            path: Path to watch
+            recursive: Whether to watch subdirectories recursively
+        """
+        if self._hot_update_manager is not None:
+            self._hot_update_manager.add_watch_path(path, recursive)
+        else:
+            raise RuntimeError("Hot update manager is not initialized. Call start_hot_update first.")
+    
+    def remove_watch_path(self, path: Union[str, Path]) -> None:
+        """
+        Remove a path from being watched for file changes
+        
+        Args:
+            path: Path to stop watching
+        """
+        if self._hot_update_manager is not None:
+            self._hot_update_manager.remove_watch_path(path)
+        else:
+            raise RuntimeError("Hot update manager is not initialized. Call start_hot_update first.") 

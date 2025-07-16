@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 import yaml
 import json
-import numpy as np
+import numpy as np 
 
 # Define helper methods for the FlowController in tests
 def mock_add_watch_path(self, path, recursive=None):

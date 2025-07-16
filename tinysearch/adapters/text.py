@@ -12,14 +12,16 @@ class TextAdapter(DataAdapter):
     Adapter for extracting text from plain text files
     """
     
-    def __init__(self, encoding: str = "utf-8"):
+    def __init__(self, encoding: str = "utf-8", errors: str = "strict"):
         """
         Initialize the text adapter
         
         Args:
             encoding: Text encoding to use when reading files
+            errors: How encoding errors are handled ('strict', 'replace', 'ignore')
         """
         self.encoding = encoding
+        self.errors = errors
     
     def extract(self, filepath: Union[str, Path]) -> List[str]:
         """
@@ -45,7 +47,7 @@ class TextAdapter(DataAdapter):
             result = []
             for file in text_files:
                 try:
-                    with open(file, "r", encoding=self.encoding) as f:
+                    with open(file, "r", encoding=self.encoding, errors=self.errors) as f:
                         result.append(f.read())
                 except Exception as e:
                     print(f"Error reading {file}: {e}")
@@ -53,7 +55,7 @@ class TextAdapter(DataAdapter):
             return result
         else:
             # Process a single file
-            with open(filepath, "r", encoding=self.encoding) as f:
+            with open(filepath, "r", encoding=self.encoding, errors=self.errors) as f:
                 content = f.read()
             
             return [content] 
