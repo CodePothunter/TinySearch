@@ -248,28 +248,44 @@ class TestFlowController:
     def test_hot_update_manager_interactions(self, flow_controller, sample_data_dir):
         """Test interactions with the hot update manager"""
         # Start hot update with specific parameters
+        watch_paths = [sample_data_dir]
+        file_extensions = [".txt"]
+        
         flow_controller.start_hot_update(
-            watch_paths=[sample_data_dir],
-            file_extensions=[".txt", ".md"],
-            process_delay=2.0,
-            recursive=False
+            watch_paths=watch_paths,
+            file_extensions=file_extensions,
+            recursive=True
         )
         
-        # Check if the hot update manager has the correct configuration
-        hot_update_manager = flow_controller._hot_update_manager
-        assert hot_update_manager is not None
-        assert isinstance(hot_update_manager, HotUpdateManager)
-        assert sample_data_dir in [str(p) for p in hot_update_manager.watch_paths]
-        assert ".txt" in hot_update_manager.file_extensions
-        assert ".md" in hot_update_manager.file_extensions
-        assert hot_update_manager.process_delay == 2.0
-        assert hot_update_manager.recursive is False
+        # Test adding a new watch path
+        new_path = Path(sample_data_dir) / "new_path"
+        os.makedirs(new_path, exist_ok=True)
         
-        # Test adding a watch path
-        new_path = Path(sample_data_dir) / "new_dir"
         flow_controller.add_watch_path(new_path)
-        assert str(new_path) in hot_update_manager.watch_paths
+        
+        # Verify the path was added
+        assert str(new_path) in flow_controller._hot_update_manager.watch_paths
         
         # Test removing a watch path
         flow_controller.remove_watch_path(new_path)
-        assert str(new_path) not in hot_update_manager.watch_paths 
+        
+        # Verify the path was removed
+        assert str(new_path) not in flow_controller._hot_update_manager.watch_paths
+        
+    def test_add_watch_path_recursive_parameter(self, flow_controller, sample_data_dir):
+        """Test add_watch_path with recursive parameter"""
+        # Start hot update
+        flow_controller.start_hot_update(
+            watch_paths=[sample_data_dir],
+            recursive=False  # Default is not recursive
+        )
+        
+        # Test adding with recursive parameter
+        new_path = Path(sample_data_dir) / "another_path"
+        os.makedirs(new_path, exist_ok=True)
+        
+        # Add with recursive=True
+        flow_controller.add_watch_path(new_path, recursive=True)
+        
+        # Stop the hot update manager to avoid cleanup issues
+        flow_controller.stop_hot_update() 

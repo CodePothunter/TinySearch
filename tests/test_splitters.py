@@ -139,6 +139,88 @@ def test_character_text_splitter_empty_text():
     assert chunks[0].text == ""
 
 
+def test_character_text_splitter_complex_separators():
+    """Test CharacterTextSplitter with complex separators and edge cases"""
+    # Create a splitter with newline separator and small chunk size
+    splitter = CharacterTextSplitter(
+        chunk_size=20,
+        chunk_overlap=5,
+        separator="\n",
+        keep_separator=True
+    )
+    
+    # Text with multiple newlines and edge cases
+    text = "Line1\nLine2\nLine3VeryLongWordThatExceedsChunkSize\nLine4\nLine5"
+    
+    # Split the text
+    chunks = splitter.split([text])
+    
+    # Print chunks for debugging
+    print("\nComplex separators test chunks:")
+    for i, chunk in enumerate(chunks):
+        print(f"Chunk {i}: '{chunk.text}'")
+    
+    # Verify behavior:
+    # 1. All chunks should have length <= chunk_size or be a single word that exceeds chunk_size
+    # 2. Long words should be handled correctly
+    # 3. Separators should be kept as specified
+    # 4. Overlap should be maintained between chunks
+    
+    # The long word may be split across multiple chunks
+    long_word_parts_found = False
+    for chunk in chunks:
+        if "VeryLongWordTh" in chunk.text or "ordThatExceedsChunkSize" in chunk.text:
+            long_word_parts_found = True
+            break
+    
+    assert long_word_parts_found, "Parts of the long word should be present in the chunks"
+    
+    # Each chunk should either be <= chunk_size or contain part of an unsplittable long word
+    for chunk in chunks:
+        if len(chunk.text) > 20:  # chunk_size
+            # If a chunk is longer than chunk_size, it should contain part of the long word
+            assert ("VeryLongWord" in chunk.text or 
+                   "ThatExceedsChunkSize" in chunk.text or 
+                   "ordThatExceeds" in chunk.text), \
+                f"Chunk exceeds size but doesn't contain part of the long word: '{chunk.text}'"
+
+
+def test_character_text_splitter_boundary_handling():
+    """Test CharacterTextSplitter's handling of boundary cases"""
+    # Create a splitter with space separator
+    splitter = CharacterTextSplitter(
+        chunk_size=10,
+        chunk_overlap=0,
+        separator=" "
+    )
+    
+    # Text with exactly chunk_size characters
+    text_exact = "1234567890"
+    chunks_exact = splitter.split([text_exact])
+    assert len(chunks_exact) == 1, "Text exactly equal to chunk_size should be one chunk"
+    assert chunks_exact[0].text == "1234567890"
+    
+    # Text with exactly chunk_size+1 characters
+    text_plus_one = "12345678901"
+    chunks_plus_one = splitter.split([text_plus_one])
+    assert len(chunks_plus_one) == 2, "Text one char longer than chunk_size should be two chunks"
+    
+    # Text with spaces at boundaries
+    text_spaces = "12345 67890 12345"
+    chunks_spaces = splitter.split([text_spaces])
+    print("\nBoundary test chunks:")
+    for i, chunk in enumerate(chunks_spaces):
+        print(f"Chunk {i}: '{chunk.text}'")
+    
+    # Check that chunks are split at word boundaries
+    for chunk in chunks_spaces:
+        # Chunk should not start or end with space when using space separator
+        assert not chunk.text.startswith(" "), f"Chunk should not start with space: '{chunk.text}'"
+        # In case strip_whitespace is True (default), check if spaces are properly stripped
+        if splitter.strip_whitespace:
+            assert not chunk.text.endswith(" "), f"Chunk should not end with space: '{chunk.text}'"
+
+
 def test_character_text_splitter_error_cases():
     """Test error cases for CharacterTextSplitter"""
     # Invalid chunk_size and chunk_overlap relationship

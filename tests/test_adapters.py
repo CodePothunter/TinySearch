@@ -114,6 +114,113 @@ def test_text_adapter_nonexistent_file():
         adapter.extract("/path/to/nonexistent/file.txt")
 
 
+def test_text_adapter_encoding_errors():
+    """Test TextAdapter handling of encoding errors"""
+    # Create a file with non-UTF8 content
+    content_bytes = b'\x80\x81\x82\x83\xff'  # Invalid UTF-8 bytes
+    
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".txt", delete=False) as f:
+        f.write(content_bytes)
+        filepath = f.name
+    
+    try:
+        # Adapter with strict encoding should fail
+        adapter_strict = TextAdapter(encoding="utf-8", errors="strict")
+        with pytest.raises(UnicodeDecodeError):
+            adapter_strict.extract(filepath)
+        
+        # Adapter with replace error handling should succeed
+        adapter_replace = TextAdapter(encoding="utf-8", errors="replace")
+        texts_replace = adapter_replace.extract(filepath)
+        assert len(texts_replace) == 1
+        assert texts_replace[0] != ""  # Should contain replacement chars
+        
+        # Adapter with ignore error handling should succeed
+        adapter_ignore = TextAdapter(encoding="utf-8", errors="ignore")
+        texts_ignore = adapter_ignore.extract(filepath)
+        assert len(texts_ignore) == 1
+        
+    finally:
+        # Clean up
+        os.unlink(filepath)
+
+
+def test_text_adapter_empty_file():
+    """Test TextAdapter with an empty file"""
+    # Create an empty file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        filepath = f.name
+    
+    try:
+        # Empty file should return empty text
+        adapter = TextAdapter()
+        texts = adapter.extract(filepath)
+        
+        assert len(texts) == 1
+        assert texts[0] == ""
+    
+    finally:
+        # Clean up
+        os.unlink(filepath)
+
+
+def test_text_adapter_large_file_handling():
+    """Test TextAdapter with a large file to ensure memory efficiency"""
+    # Create a temporary large-ish file (not too large for testing)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        # Write about 1MB of data
+        line = "This is a test line with some content. " * 100  # ~3KB per line
+        for _ in range(350):  # ~1MB total
+            f.write(line + "\n")
+        filepath = f.name
+    
+    try:
+        # Should handle large files without memory issues
+        adapter = TextAdapter()
+        texts = adapter.extract(filepath)
+        
+        assert len(texts) == 1
+        assert len(texts[0]) > 1000000  # Should contain all the text (>1MB)
+    
+    finally:
+        # Clean up
+        os.unlink(filepath)
+
+
+def test_text_adapter_directory_empty():
+    """Test TextAdapter with an empty directory"""
+    # Create a temporary empty directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Directory with no files should return empty list
+        adapter = TextAdapter()
+        texts = adapter.extract(temp_dir)
+        
+        assert len(texts) == 0
+
+
+def test_text_adapter_directory_non_text_files():
+    """Test TextAdapter with non-text files in directory"""
+    # Create a temporary directory with a binary file
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create a binary file
+        bin_file = Path(temp_dir) / "binary.bin"
+        with open(bin_file, "wb") as f:
+            f.write(b'\x00\x01\x02\x03\x04')
+        
+        # Create a text file
+        txt_file = Path(temp_dir) / "text.txt"
+        with open(txt_file, "w") as f:
+            f.write("This is a text file")
+        
+        # Extract - binary file should be skipped by default (errors='ignore')
+        adapter = TextAdapter()
+        texts = adapter.extract(temp_dir)
+        
+        # Should only get text from the text file
+        assert len(texts) == 1
+        assert texts[0] == "This is a text file"
+
+
 def test_adapter_interface():
     """Test DataAdapter interface"""
     # Ensure TextAdapter implements DataAdapter interface
