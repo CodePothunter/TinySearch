@@ -55,7 +55,7 @@ def test_config_load_yaml():
         
         # Default values should still be present for unspecified settings
         assert config.get("splitter.chunk_overlap") == 50
-        assert config.get("indexer.index_path") == "index.faiss"
+        assert config.get("indexer.index_path") == ".cache/index.faiss"
     
     finally:
         # Clean up
