@@ -85,7 +85,7 @@ indexer:
   type: faiss  # Currently only "faiss" is supported
   index_type: "Flat"  # Options: "Flat", "IVF", "HNSW"
   metric: "cosine"  # Options: "cosine", "l2", "ip" (inner product)
-  index_path: "index.faiss"  # Path to save/load the index
+  index_path: ".cache/index.faiss"  # Path to save/load the index (default: ./.cache/index.faiss)
   nlist: 100  # Number of clusters for IVF index
   nprobe: 10  # Number of clusters to search for IVF index
   use_gpu: false  # Whether to use GPU for indexing

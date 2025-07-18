@@ -30,7 +30,7 @@ indexer:
   type: faiss
   index_type: Flat  # Flat, IVF, HNSW
   metric: cosine  # cosine, l2, ip
-  index_path: index.faiss
+  index_path: .cache/index.faiss
   nlist: 100
   nprobe: 10
   use_gpu: false

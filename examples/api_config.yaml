@@ -18,7 +18,7 @@ embedder:
 
 # Indexer configuration
 indexer:
-  index_path: index.faiss
+  index_path: .cache/index.faiss
   metric: cosine
 
 # Query engine configuration

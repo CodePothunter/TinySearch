@@ -36,7 +36,7 @@ embedder:
   device: cpu
   params: {}
 indexer:
-  index_path: index.faiss
+  index_path: .cache/index.faiss
   metric: cosine
 query_engine:
   method: template

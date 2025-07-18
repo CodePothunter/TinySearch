@@ -193,7 +193,7 @@ embedder:
 
 indexer:
   type: faiss
-  index_path: index.faiss
+  index_path: .cache/index.faiss
   metric: cosine
   
 query_engine:

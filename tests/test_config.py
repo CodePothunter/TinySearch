@@ -24,7 +24,7 @@ def test_config_default():
     assert config.get("splitter.chunk_size") == 300
     assert config.get("splitter.chunk_overlap") == 50
     assert config.get("embedder.model") == "Qwen/Qwen-Embedding"
-    assert config.get("indexer.index_path") == "index.faiss"
+    assert config.get("indexer.index_path") == ".cache/index.faiss"
 
 
 def test_config_load_yaml():

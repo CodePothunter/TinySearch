@@ -85,7 +85,7 @@ indexer:
   type: faiss  # 目前仅支持 "faiss"
   index_type: "Flat"  # 选项："Flat", "IVF", "HNSW"
   metric: "cosine"  # 选项："cosine", "l2", "ip"（内积）
-  index_path: "index.faiss"  # 保存/加载索引的路径
+  index_path: ".cache/index.faiss"  # 保存/加载索引的路径（默认：.cache/index.faiss）
   nlist: 100  # IVF 索引的集群数量
   nprobe: 10  # 搜索时检查的集群数量
   use_gpu: false  # 是否使用 GPU 进行索引

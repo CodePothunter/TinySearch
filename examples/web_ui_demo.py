@@ -158,7 +158,7 @@ def create_demo_config():
         },
         "indexer": {
             "type": "faiss",
-            "index_path": "demo_index.faiss",
+            "index_path": ".cache/index.faiss",
             "metric": "cosine"
         },
         "query_engine": {
