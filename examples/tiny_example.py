@@ -20,7 +20,7 @@ def main():
     texts = TextAdapter().extract("example_data/sample.txt")
     
     # 2. Split text into chunks - one line
-    chunks = CharacterTextSplitter(chunk_size=20).split(texts)
+    chunks = CharacterTextSplitter(chunk_size=20, chunk_overlap=10).split(texts)
     
     # 3. Generate embeddings - one line  
     vectors = HuggingFaceEmbedder().embed([chunk.text for chunk in chunks])

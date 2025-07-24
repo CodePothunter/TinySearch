@@ -103,7 +103,7 @@ class HuggingFaceEmbedder(Embedder):
                         **model_kwargs
                     )
                 except Exception as e:
-                    print(f"Failed to load model with flash attention, trying normal attention")
+                    print(f"Failed to load model with flash attention (you can try to install flash attention 2 with `pip install flash-attn --no-build-isolation`), trying normal attention")
                     model_kwargs = {}
                 
                 self._model = AutoModel.from_pretrained(

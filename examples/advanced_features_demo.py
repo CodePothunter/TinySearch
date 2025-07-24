@@ -40,6 +40,7 @@ from tinysearch.embedders import HuggingFaceEmbedder
 from tinysearch.indexers.faiss_indexer import FAISSIndexer
 from tinysearch.query.template import TemplateQueryEngine
 from tinysearch.flow.controller import FlowController
+from tinysearch.cli import load_adapter, load_splitter, load_embedder, load_indexer, load_query_engine
 
 # Set up logging
 logging.basicConfig(
@@ -265,6 +266,8 @@ def run_advanced_example():
             "adapter": {
                 "type": "custom",  # We'll implement a custom adapter
                 "params": {
+                    "module": "tinysearch.adapters", # You can use custom adapter here with the module path
+                    "class": "TextAdapter", # You can use custom adapter here with the class name
                     "encoding": "utf-8"
                 }
             },
@@ -277,7 +280,7 @@ def run_advanced_example():
             "embedder": {
                 "type": "huggingface",
                 "model": "sentence-transformers/all-MiniLM-L6-v2",  # Smaller model for demo
-                "device": "cpu",  # Use CPU for the demo
+                "device": "cuda",  # Use gpu for the demo
                 "normalize": True
             },
             "indexer": {
@@ -331,40 +334,15 @@ def run_advanced_example():
                     logger.warning(f"No adapter for extension {extension}, using text adapter")
                     return TextAdapter(encoding=self.encoding).extract(filepath)
         
-        # 4. Initialize components
-        data_adapter = MultiFormatAdapter(encoding="utf-8")
-        text_splitter = CharacterTextSplitter(
-            chunk_size=200,
-            chunk_overlap=50,
-            separator="\n\n"
-        )
-        embedder = HuggingFaceEmbedder(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            device="cpu",
-            max_length=512,
-            normalize_embeddings=True
-        )
-        
-        # Get embedding dimension
-        sample_text = "Sample text to determine embedding dimension."
-        sample_embedding = embedder.embed([sample_text])[0]
-        embedding_dimension = len(sample_embedding)
-        logger.info(f"Detected embedding dimension: {embedding_dimension}")
-        
-        # Initialize the indexer with the correct dimension
-        indexer = FAISSIndexer(
-            metric="cosine",
-            use_gpu=False  # Use CPU for the demo
-        )
-        # Store dimension for later use if needed
-        indexer.dimension = embedding_dimension
-        
-        query_engine = TemplateQueryEngine(
-            embedder=embedder,
-            indexer=indexer,
-            template="Find information about: {query}",
-            rerank_fn=custom_reranker  # Use our custom reranker
-        )
+        # === 使用 config 工厂方法自动构建所有核心组件 ===
+        data_adapter = load_adapter(config)
+        text_splitter = load_splitter(config)
+        embedder = load_embedder(config)
+        indexer = load_indexer(config)
+        # 这里需要传递自定义 reranker
+        query_engine = load_query_engine(config, embedder, indexer)
+        # 如果需要自定义 reranker，可以直接赋值
+        query_engine.rerank_fn = custom_reranker
         
         # 5. Create flow controller
         flow_controller = FlowController(
