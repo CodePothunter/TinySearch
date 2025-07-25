@@ -97,12 +97,13 @@ TextSplitter 将文本分成适合嵌入的较小段落。它处理：
 
 ### Embedder（嵌入器）
 
-Embedder 使用机器学习模型将文本块转换为向量嵌入。主要实现是 `HuggingFaceEmbedder`，它：
-- 支持来自 Hugging Face 的各种嵌入模型
+Embedder 使用机器学习模型将文本块转换为向量嵌入。主要实现为 `HuggingFaceEmbedder`，其特点包括：
+- 支持来自 Hugging Face 的多种嵌入模型
 - 在可用时提供 GPU 加速
-- 处理批处理以提高效率
+- 支持高效的批量处理
 - 支持嵌入向量归一化
 - 管理嵌入缓存以避免重复计算
+- **在 CPU 下支持 bf16（bfloat16）推理，如不支持会自动回退到 float32 并给出提示**
 
 ### VectorIndexer（向量索引器）
 

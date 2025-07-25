@@ -67,6 +67,8 @@ class Embedder(ABC):
         pass
 ```
 
+> Note: When using a CPU device, the HuggingFaceEmbedder will automatically attempt to use bf16 (bfloat16) inference for embedding generation if supported. If bf16 is not available, it will fall back to float32 and print a warning.
+
 ### VectorIndexer
 
 ```python

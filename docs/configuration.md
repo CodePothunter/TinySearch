@@ -190,7 +190,10 @@ embedder:
   batch_size: 8  # Batch size for efficiency
   normalize: true  # Whether to normalize embeddings to unit length
   cache_dir: "~/.cache/tinysearch/models"  # Cache directory for models
+  # bf16: true  # (Optional) If set, will try bf16 inference on CPU. If not set, will auto-try bf16 on CPU and fallback to float32 if not supported.
 ```
+
+> Note: When `device` is set to `cpu`, TinySearch will automatically attempt to use bf16 (bfloat16) inference for embedding generation if supported by your hardware and PyTorch version. If bf16 is not available, it will gracefully fall back to float32 and print a warning message.
 
 ### Vector Indexer
 

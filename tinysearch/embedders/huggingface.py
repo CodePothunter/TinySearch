@@ -7,6 +7,7 @@ import os
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
+import torch
 
 from tinysearch.base import Embedder
 
@@ -54,7 +55,6 @@ class HuggingFaceEmbedder(Embedder):
         # Set device
         if device is None:
             try:
-                import torch
                 device = "cuda" if torch.cuda.is_available() else "cpu"
             except ImportError:
                 device = "cpu"
@@ -89,7 +89,6 @@ class HuggingFaceEmbedder(Embedder):
                 model_kwargs = {}
                 if "Qwen3" in self.model_name:
                     try:
-                        import torch
                         model_kwargs = {
                             "attn_implementation": "flash_attention_2", 
                             "torch_dtype": torch.float16
@@ -143,7 +142,6 @@ class HuggingFaceEmbedder(Embedder):
         # Different models store their config differently
         try:
             assert self._initialized, "Model not initialized"
-            import torch
             with torch.no_grad():
                 # Create a simple input to get output shape
                 inputs = self._tokenizer(
@@ -190,7 +188,6 @@ class HuggingFaceEmbedder(Embedder):
         Returns:
             Tensor containing the embeddings
         """
-        import torch
         # Check if left padding (common in Qwen3 models)
         left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
         if left_padding:
@@ -201,6 +198,21 @@ class HuggingFaceEmbedder(Embedder):
             batch_size = last_hidden_states.shape[0]
             return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
     
+    def init_bf16(self):
+        """
+        Test if bf16 inference is available on CPU. Sets self._bf16_available flag.
+        """
+        self._bf16_available = False
+        try:
+            # 尝试toy张量的bf16推理
+            x = torch.randn(2, 2)
+            with torch.autocast('cpu', dtype=torch.bfloat16):
+                y = x * 2
+            self._bf16_available = True
+            print(f"The current device is {self.device}, BF16 mode has been succesfully enabled.")
+        except Exception as e:
+            self._bf16_available = False
+
     def embed(self, texts: List[str]) -> List[List[float]]:
         """
         Convert texts to embedding vectors
@@ -213,17 +225,17 @@ class HuggingFaceEmbedder(Embedder):
         """
         # Initialize model if not already done
         self._initialize_model()
-        
+        # 初始化bf16能力（只做一次）
+        if not hasattr(self, '_bf16_checked'):
+            self.init_bf16()
+            self._bf16_checked = True
         # Split texts into batches
         batches = [texts[i:i + self.batch_size] for i in range(0, len(texts), self.batch_size)]
         total_batches = len(batches)
-        
         all_embeddings = []
-        
+
         try:
             assert self._initialized, "Model not initialized"
-            import torch
-            
             with torch.no_grad():
                 for batch_idx, batch in tqdm(enumerate(batches), total=total_batches, desc="Embedding texts"):
                     # Report progress
@@ -241,11 +253,18 @@ class HuggingFaceEmbedder(Embedder):
                     
                     # Move inputs to device
                     inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                    
-                    # Get model output
-                    outputs = self._model(**inputs) # type: ignore
-                    
-                    # Get embeddings based on pooling method
+                    # 根据flag决定是否用bf16
+                    if self.device == "cpu" and getattr(self, '_bf16_available', False):
+                        try:
+                            with torch.autocast('cpu', dtype=torch.bfloat16):
+                                outputs = self._model(**inputs) # type: ignore
+                        except Exception as bf16_e:
+                            print(traceback.format_exc())
+                            print("[Warning] bf16 inference on CPU failed, falling back to float32. Reason:", bf16_e)
+                            self._bf16_available = False
+                            outputs = self._model(**inputs) # type: ignore
+                    else:
+                        outputs = self._model(**inputs) # type: ignore
                     if self.pooling == "last_token" or "Qwen3" in self.model_name:
                         embeddings = self._last_token_pool(outputs.last_hidden_state, inputs["attention_mask"])
                     elif self.pooling == "cls":

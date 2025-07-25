@@ -103,6 +103,7 @@ Embedder converts text chunks into vector embeddings using machine learning mode
 - Handles batching for efficient processing
 - Supports embedding normalization
 - Manages embedding cache to avoid redundant computation
+- **Supports bf16 (bfloat16) inference on CPU if available, with automatic fallback to float32 if not supported**
 
 ### VectorIndexer
 

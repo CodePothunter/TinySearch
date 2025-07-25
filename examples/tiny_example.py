@@ -23,14 +23,14 @@ def main():
     chunks = CharacterTextSplitter(chunk_size=20, chunk_overlap=10).split(texts)
     
     # 3. Generate embeddings - one line  
-    vectors = HuggingFaceEmbedder().embed([chunk.text for chunk in chunks])
+    vectors = HuggingFaceEmbedder(device="cpu").embed([chunk.text for chunk in chunks])
     
     # 4. Build search index - one line
     indexer = FAISSIndexer()
     indexer.build(vectors, chunks)
     
     # 5. Search! - one line
-    results = indexer.search(HuggingFaceEmbedder().embed(["What is TinySearch?"])[0], top_k=3)
+    results = indexer.search(HuggingFaceEmbedder(device="cpu").embed(["What is TinySearch?"])[0], top_k=3)
     
     # Display results
     print("\nSearch Results:")

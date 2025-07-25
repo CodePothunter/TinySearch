@@ -331,6 +331,8 @@ embedder = HuggingFaceEmbedder(
 vectors = embedder.embed(["您的文本内容"])
 ```
 
+> 注意：当设备为CPU时，HuggingFaceEmbedder会自动尝试使用bf16（bfloat16）推理生成嵌入，如不支持则自动回退到float32并给出警告提示。
+
 ### VectorIndexer 实现
 
 #### FAISSIndexer（FAISS索引器）
