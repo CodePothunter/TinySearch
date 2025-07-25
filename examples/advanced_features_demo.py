@@ -264,7 +264,7 @@ def run_advanced_example():
         # 2. Create configuration
         config_dict = {
             "adapter": {
-                "type": "custom",  # We'll implement a custom adapter
+                "type": "custom",  # You can implement a custom adapter
                 "params": {
                     "module": "tinysearch.adapters", # You can use custom adapter here with the module path
                     "class": "TextAdapter", # You can use custom adapter here with the class name
@@ -311,9 +311,16 @@ def run_advanced_example():
         config = Config()
         config.config = config_dict
         
-        # 3. Create a custom adapter that can handle multiple file types
+        # 3. (An virtual example) Create a custom adapter that can handle multiple file types
+        # Save the following code into a file named multi_format_adapter.py
+        # and then use the following code to load the adapter
+        """
+        config.adapter.type = "custom"
+        config.adapter.params.module = "multi_format_adapter"
+        config.adapter.params.class = "MultiFormatAdapter"
+        ```python
         class MultiFormatAdapter(DataAdapter):
-            """Custom adapter that can handle multiple file formats"""
+            "Custom adapter that can handle multiple file formats"
             
             def __init__(self, encoding: str = "utf-8"):
                 self.encoding = encoding
@@ -322,26 +329,27 @@ def run_advanced_example():
                     ".md": MarkdownAdapter(encoding=encoding),
                     ".json": JSONAdapter(encoding=encoding, fields=["content"])
                 }
-                
+              
             def extract(self, filepath: Union[str, Path]) -> List[str]:
-                """Extract text from multiple file formats"""
+                "Extract text from multiple file formats"
                 filepath = Path(filepath)
                 extension = filepath.suffix.lower()
-                
+           
                 if extension in self.adapters:
                     return self.adapters[extension].extract(filepath)
                 else:
                     logger.warning(f"No adapter for extension {extension}, using text adapter")
                     return TextAdapter(encoding=self.encoding).extract(filepath)
-        
-        # === 使用 config 工厂方法自动构建所有核心组件 ===
+        ```
+        """
+
+        # === Use the config factory method to automatically build all core components ===
         data_adapter = load_adapter(config)
         text_splitter = load_splitter(config)
         embedder = load_embedder(config)
         indexer = load_indexer(config)
-        # 这里需要传递自定义 reranker
+        # If you need to customize the reranker, you can directly assign it to the query_engine
         query_engine = load_query_engine(config, embedder, indexer)
-        # 如果需要自定义 reranker，可以直接赋值
         query_engine.rerank_fn = custom_reranker
         
         # 5. Create flow controller
