@@ -94,17 +94,14 @@ class FAISSIndexer(VectorIndexer):
     def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """
         Search the index for vectors similar to the query vector
-        
         Args:
             query_vector: Query embedding vector
             top_k: Number of results to return
-            
         Returns:
-            List of dictionaries containing text chunks and similarity scores
+            List of dictionaries containing text chunks, similarity scores, and embedding vectors
         """
         if self.index is None:
             raise ValueError("Index has not been built yet")
-        
         try:
             import faiss
         except ImportError:
@@ -112,31 +109,24 @@ class FAISSIndexer(VectorIndexer):
                 "Could not import faiss. "
                 "Please install it with: pip install faiss-cpu or pip install faiss-gpu"
             )
-        
         # Convert query vector to numpy array
         query_np = np.array([query_vector]).astype('float32')
-        
         # Normalize query vector if using cosine similarity
         if self.metric == "cosine":
             faiss.normalize_L2(query_np)
-        
         # Search index
         distances, indices = self.index.search(query_np, top_k)
-        
         # Convert to result format
         results = []
         for i in range(len(indices[0])):
             idx = indices[0][i]
             distance = distances[0][i]
-            
             # Skip invalid indices (can happen if there are fewer results than top_k)
             if idx < 0 or idx >= len(self.texts):
                 continue
-            
             # Map to original text chunk
             text_idx = self.ids_map[idx]
             text_chunk = self.texts[text_idx]
-            
             # Convert distance to similarity score
             if self.metric == "cosine" or self.metric == "ip":
                 # For cosine and inner product, higher is better, and maximum is 1
@@ -147,13 +137,14 @@ class FAISSIndexer(VectorIndexer):
             else:
                 # For L2, lower is better, so invert and normalize roughly
                 similarity = 1.0 / (1.0 + float(distance))
-            
+            # 获取embedding向量
+            embedding = self.index.reconstruct(int(idx))
             results.append({
                 "text": text_chunk.text,
                 "metadata": text_chunk.metadata,
-                "score": similarity
+                "score": similarity,
+                "embedding": embedding
             })
-        
         return results
     
     def save(self, path: Union[str, Path]) -> None:
