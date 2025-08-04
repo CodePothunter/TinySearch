@@ -21,6 +21,7 @@ import tempfile
 from .config import Config
 from .cli import load_embedder, load_indexer, load_query_engine, load_adapter, load_splitter
 from .flow.controller import FlowController
+from .logger import get_logger, configure_logger, log_success, log_warning, log_error
 
 
 # Models for API requests and responses
@@ -173,17 +174,18 @@ def initialize_components():
         
         # Load index
         index_path = config.get("indexer.index_path", "index.faiss")
+        logger = get_logger("api_init")
         if Path(index_path).exists():
             indexer.load(index_path)
-            print(f"TinySearch initialized with index: {index_path}")
+            log_success(f"TinySearch initialized with index: {index_path}")
         else:
-            print(f"Warning: Index not found: {index_path}")
-            
+            log_warning(f"Index not found: {index_path}")
+
         # Set up default API key if enabled
         if config.get("api.auth_enabled", False) and config.get("api.default_key"):
             add_api_key(config.get("api.default_key"), None)
     except Exception as e:
-        print(f"Error initializing TinySearch: {e}")
+        log_error(f"Error initializing TinySearch", e)
         raise e
 
 
@@ -321,7 +323,7 @@ def startup_event():
     try:
         initialize_components()
     except Exception as e:
-        print(f"Failed to initialize components: {e}")
+        log_error(f"Failed to initialize components", e)
 
 
 @app.get("/health", response_model=HealthResponse)

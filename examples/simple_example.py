@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-A simple example of using TinySearch
+A simple example of using TinySearch with modern logging
 """
 import os
 from pathlib import Path
@@ -17,6 +17,7 @@ from tinysearch.splitters.character import CharacterTextSplitter
 from tinysearch.embedders.huggingface import HuggingFaceEmbedder
 from tinysearch.indexers.faiss_indexer import FAISSIndexer
 from tinysearch.query.template import TemplateQueryEngine
+from tinysearch.logger import get_logger, configure_logger, log_step, log_progress, log_success
 
 
 def create_example_documents(directory: Path):
@@ -120,13 +121,17 @@ def main():
     parser.add_argument("--query", default="What are the key principles of AI ethics?", help="Query to run")
     parser.add_argument("--device", default="cpu", help="Device for embedding model (cpu or cuda)")
     args = parser.parse_args()
-    
+
+    # Configure logger with modern format
+    configure_logger({"logging": {"level": "INFO", "format": "modern", "colorize": True}})
+    logger = get_logger("simple_example")
+
     # Create data directory and example documents if needed
     data_dir = Path(args.data)
     if not data_dir.exists() or not any(data_dir.iterdir()):
-        print(f"Creating example documents in {data_dir}...")
+        logger.info(f"📁 Creating example documents in {data_dir}")
         create_example_documents(data_dir)
-    
+
     # Initialize components
     adapter = TextAdapter(encoding="utf-8")
     splitter = CharacterTextSplitter(
@@ -135,7 +140,7 @@ def main():
         separator="\n\n"
     )
     embedder = HuggingFaceEmbedder(
-        model_name="Qwen/Qwen-Embedding",  # Use a smaller model if needed
+        model_name="Qwen/Qwen3-Embedding-0.6B",  # Use a smaller model if needed
         device=args.device,
         batch_size=4
     )
@@ -150,55 +155,57 @@ def main():
     )
     
     # Extract text
-    print("Extracting text...")
+    log_step("Extracting text")
     texts = adapter.extract(data_dir)
-    print(f"Extracted {len(texts)} documents")
-    
+    logger.info(f"📄 Extracted {len(texts)} documents")
+
     # Split text into chunks
-    print("Splitting text into chunks...")
+    log_step("Splitting text into chunks")
     chunks = splitter.split(texts)
-    print(f"Created {len(chunks)} text chunks")
-    
+    logger.info(f"✂️  Created {len(chunks)} text chunks")
+
     # Generate embeddings
-    print("Generating embeddings...")
+    log_step("Generating embeddings")
     vectors = embedder.embed([chunk.text for chunk in chunks])
-    print(f"Generated {len(vectors)} embedding vectors")
-    
+    logger.info(f"🧠 Generated {len(vectors)} embedding vectors")
+
     # Build index
-    print("Building index...")
+    log_step("Building index")
     indexer.build(vectors, chunks)
     
     # Save index
     index_path = Path(args.index)
-    print(f"Saving index to {index_path}...")
+    log_step(f"Saving index to {index_path}")
     indexer.save(index_path)
-    
+
     # Process query
     query = args.query
-    print(f"\nQuery: {query}")
-    
+    logger.info(f"\n🔍 Query: {query}")
+
     # Generate query embedding
     query_vectors = embedder.embed([query])
     query_vector = query_vectors[0]
-    
+
     # Search index
     results = indexer.search(query_vector, top_k=3)
-    
+
     # Print results
-    print("\nResults:")
+    logger.info("\n📋 Results:")
     for i, result in enumerate(results):
-        print(f"\n[{i+1}] Score: {result['score']:.4f}")
-        
+        logger.info(f"\n[{i+1}] Score: {result['score']:.4f}")
+
         # Print metadata if available
         if result.get("metadata"):
             meta_str = ", ".join([f"{k}: {v}" for k, v in result["metadata"].items() if k not in ["chunk_index", "total_chunks"]])
             if meta_str:
-                print(f"Metadata: {meta_str}")
-        
+                logger.info(f"📝 Metadata: {meta_str}")
+
         # Print text
-        print("---")
-        print(result["text"])
-        print("---")
+        logger.info("---")
+        logger.info(result["text"])
+        logger.info("---")
+
+    log_success("Example completed successfully!")
 
 
 if __name__ == "__main__":

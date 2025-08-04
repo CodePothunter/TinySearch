@@ -17,6 +17,7 @@ from .embedders import HuggingFaceEmbedder
 # 直接从模块导入
 from .indexers.faiss_indexer import FAISSIndexer
 from .query.template import TemplateQueryEngine
+from .logger import get_logger, configure_logger, log_step, log_progress, log_success, log_error
 
 
 def load_adapter(config: Config) -> DataAdapter:
@@ -163,95 +164,98 @@ def load_query_engine(config: Config, embedder: Embedder, indexer: FAISSIndexer)
 def build_index(args: argparse.Namespace, config: Config) -> None:
     """
     Build a search index
-    
+
     Args:
         args: Command-line arguments
         config: Configuration object
     """
-    print(f"Building index from {args.data}...")
-    
+    logger = get_logger("build_index")
+    logger.info(f"🚀 Building index from {args.data}")
+
     # Load components
     adapter = load_adapter(config)
     splitter = load_splitter(config)
     embedder = load_embedder(config)
     indexer = load_indexer(config)
-    
+
     # Extract text from data source
-    print("Extracting text...")
+    log_step("Extracting text")
     texts = adapter.extract(args.data)
-    print(f"Extracted {len(texts)} documents")
-    
+    logger.info(f"📄 Extracted {len(texts)} documents")
+
     # Split text into chunks
-    print("Splitting text into chunks...")
+    log_step("Splitting text into chunks")
     chunks = splitter.split(texts)
-    print(f"Created {len(chunks)} text chunks")
-    
+    logger.info(f"✂️  Created {len(chunks)} text chunks")
+
     # Generate embeddings
-    print("Generating embeddings...")
+    log_step("Generating embeddings")
     vectors = embedder.embed([chunk.text for chunk in chunks])
-    print(f"Generated {len(vectors)} embedding vectors")
-    
+    logger.info(f"🧠 Generated {len(vectors)} embedding vectors")
+
     # Build index
-    print("Building index...")
+    log_step("Building index")
     indexer.build(vectors, chunks)
-    
+
     # Save index
     index_path = Path(config.get("indexer.index_path", "index.faiss"))
-    print(f"Saving index to {index_path}...")
+    log_step(f"Saving index to {index_path}")
     indexer.save(index_path)
-    
-    print("Index built successfully")
+
+    log_success("Index built successfully")
 
 
 def query_index(args: argparse.Namespace, config: Config) -> None:
     """
     Query a search index
-    
+
     Args:
         args: Command-line arguments
         config: Configuration object
     """
+    logger = get_logger("query_index")
+
     # Load components
     embedder = load_embedder(config)
     indexer = load_indexer(config)
     query_engine = load_query_engine(config, embedder, indexer)
-    
+
     # Load index
     index_path = Path(config.get("indexer.index_path", "index.faiss"))
-    print(f"Loading index from {index_path}...")
+    log_step(f"Loading index from {index_path}")
     indexer.load(index_path)
-    
+
     # Process query
     query = args.q
     top_k = args.top_k or config.get("query_engine.top_k", 5)
-    
-    print(f"Query: {query}")
-    print(f"Retrieving top {top_k} results...")
-    
+
+    logger.info(f"🔍 Query: {query}")
+    logger.info(f"📊 Retrieving top {top_k} results")
+
     # Execute query
     results = query_engine.retrieve(query, top_k=top_k)
-    
+
     # Print results
-    print("\nResults:")
+    logger.info("\n📋 Results:")
     for i, result in enumerate(results):
-        print(f"\n[{i+1}] Score: {result['score']:.4f}")
-        
+        logger.info(f"\n[{i+1}] Score: {result['score']:.4f}")
+
         # Print metadata if available
         if result.get("metadata"):
             meta_str = ", ".join([f"{k}: {v}" for k, v in result["metadata"].items() if k not in ["chunk_index", "total_chunks"]])
             if meta_str:
-                print(f"Metadata: {meta_str}")
-        
+                logger.info(f"📝 Metadata: {meta_str}")
+
         # Print text
-        print("---")
-        print(result["text"])
-        print("---")
-    
+        logger.info("---")
+        logger.info(result["text"])
+        logger.info("---")
+
     # Save results to file if requested
     if args.output:
         output_path = Path(args.output)
-        print(f"Saving results to {output_path}...")
-        
+        log_step(f"Saving results to {output_path}")
+
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
 
@@ -262,32 +266,34 @@ def main() -> None:
     """
     parser = argparse.ArgumentParser(description="TinySearch: A lightweight vector retrieval system")
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
-    
+
     # Index command
     index_parser = subparsers.add_parser("index", help="Build a search index")
     index_parser.add_argument("--data", required=True, help="Path to data file or directory")
     index_parser.add_argument("--config", required=True, help="Path to configuration file")
-    
+
     # Query command
     query_parser = subparsers.add_parser("query", help="Query a search index")
     query_parser.add_argument("--q", required=True, help="Query string")
     query_parser.add_argument("--config", required=True, help="Path to configuration file")
     query_parser.add_argument("--top-k", type=int, help="Number of results to return")
     query_parser.add_argument("--output", help="Path to save results to (JSON format)")
-    
+
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         return
-    
-    # Load configuration
+
+    # Load configuration and configure logger
     try:
         config = Config(args.config)
+        configure_logger(config.data)
+        logger = get_logger("main")
     except Exception as e:
-        print(f"Error loading configuration: {e}")
+        log_error(f"Error loading configuration: {e}")
         return
-    
+
     # Execute command
     try:
         if args.command == "index":
@@ -295,9 +301,9 @@ def main() -> None:
         elif args.command == "query":
             query_index(args, config)
     except Exception as e:
-        print(f"Error: {e}")
         import traceback
-        traceback.print_exc()
+        log_error(f"Command execution failed: {e}")
+        logger.debug(traceback.format_exc())
 
 
 if __name__ == "__main__":

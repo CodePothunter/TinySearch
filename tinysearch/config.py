@@ -58,6 +58,15 @@ class Config:
                 "rate_limit_window": 60,  # seconds
                 "default_key": "",  # default API key (if empty, will be generated)
                 "master_key": ""  # master key for creating new API keys
+            },
+            "logging": {
+                "level": "INFO",
+                "format": "modern",  # modern, simple, detailed
+                "show_time": True,
+                "show_location": False,
+                "colorize": True,
+                "file": None,  # Optional file path for logging
+                "file_level": "DEBUG"
             }
         }
         

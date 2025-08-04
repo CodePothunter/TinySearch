@@ -326,6 +326,84 @@ adapter:
       param1: value1
 ```
 
+## Modern Logging System
+
+TinySearch features a modern logging system powered by [loguru](https://github.com/Delgan/loguru) with beautiful, colorful output and flexible configuration options.
+
+### Logging Features
+
+- 🎨 **Colorful Output**: Modern, emoji-enhanced logging with syntax highlighting
+- ⚙️ **Flexible Configuration**: Easily customize log levels, formats, and output destinations
+- 📁 **File Logging**: Optional file output with automatic rotation and compression
+- 🎯 **Multiple Formats**: Choose from modern, simple, or detailed output formats
+- 🔧 **Runtime Configuration**: Configure logging through YAML/JSON config files
+
+### Logging Configuration
+
+Configure logging in your `config.yaml`:
+
+```yaml
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Format style: modern, simple, detailed
+  format: "modern"
+
+  # Whether to show timestamps and file locations
+  show_time: true
+  show_location: false
+
+  # Whether to use colored output
+  colorize: true
+
+  # Optional file logging
+  file: "logs/tinysearch.log"
+  file_level: "DEBUG"
+```
+
+### Format Examples
+
+**Modern Format** (default):
+```
+15:30:45 | INFO  | 🚀 Building index from data/documents
+15:30:46 | INFO  | 📄 Extracted 150 documents
+15:30:47 | INFO  | ✂️  Created 450 text chunks
+```
+
+**Simple Format**:
+```
+15:30:45 | INFO  | Building index from data/documents
+15:30:46 | INFO  | Extracted 150 documents
+```
+
+**Detailed Format**:
+```
+2024-01-15 15:30:45 | INFO     | cli:build_index:172 | Building index from data/documents
+2024-01-15 15:30:46 | INFO     | cli:build_index:183 | Extracted 150 documents
+```
+
+### Programmatic Usage
+
+```python
+from tinysearch.logger import get_logger, configure_logger, log_success
+
+# Configure logging
+configure_logger({
+    "logging": {
+        "level": "INFO",
+        "format": "modern",
+        "colorize": True
+    }
+})
+
+# Get a logger
+logger = get_logger("my_component")
+
+# Use convenience functions
+log_success("Operation completed!")
+```
+
 ## Development
 
 To set up the development environment:

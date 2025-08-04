@@ -1,0 +1,19 @@
+
+Embedding Models
+
+Embedding models convert text, images, or other data into numerical vector representations.
+
+Types of embedding models:
+1. Word embeddings: Word2Vec, GloVe, FastText
+2. Sentence embeddings: SBERT, USE (Universal Sentence Encoder)
+3. Document embeddings: Doc2Vec
+4. Multilingual embeddings: mBERT, XLM-R
+
+Applications of embeddings:
+- Semantic search
+- Text classification
+- Clustering similar content
+- Information retrieval
+- Knowledge graphs
+
+Recent advancements include contextual embeddings from transformer models like BERT, GPT, and T5.

@@ -1,0 +1,95 @@
+# TinySearch Configuration with Modern Logging
+# This example shows how to configure TinySearch with loguru-based logging
+
+# Data adapter configuration
+adapter:
+  type: "text"
+  params:
+    encoding: "utf-8"
+
+# Text splitter configuration
+splitter:
+  chunk_size: 300
+  chunk_overlap: 50
+  separator: "\n\n"
+
+# Embedder configuration
+embedder:
+  model: "Qwen/Qwen-Embedding"
+  device: "cpu"  # or "cuda" if GPU is available
+  params:
+    batch_size: 4
+
+# Vector indexer configuration
+indexer:
+  index_path: "example_index.faiss"
+  index_type: "Flat"
+  metric: "cosine"
+  use_gpu: false
+
+# Query engine configuration
+query_engine:
+  method: "template"
+  template: "{query}"
+  top_k: 5
+
+# Flow configuration
+flow:
+  use_cache: true
+  cache_dir: ".cache"
+
+# API configuration
+api:
+  auth_enabled: false
+  rate_limit_enabled: false
+  rate_limit: 60
+  rate_limit_window: 60
+
+# Modern logging configuration with loguru
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+  
+  # Format style: modern, simple, detailed
+  # - modern: Clean format with emojis and colors
+  # - simple: Minimal format with time and level
+  # - detailed: Full format with file location info
+  format: "modern"
+  
+  # Whether to show timestamps
+  show_time: true
+  
+  # Whether to show file location (file:function:line)
+  show_location: false
+  
+  # Whether to use colored output (disable for log files)
+  colorize: true
+  
+  # Optional: Log to file (set to null to disable file logging)
+  file: null  # e.g., "logs/tinysearch.log"
+  
+  # Log level for file output (can be different from console)
+  file_level: "DEBUG"
+
+# Example configurations for different scenarios:
+
+# For development (verbose logging):
+# logging:
+#   level: "DEBUG"
+#   format: "detailed"
+#   show_location: true
+#   file: "logs/debug.log"
+
+# For production (minimal logging):
+# logging:
+#   level: "WARNING"
+#   format: "simple"
+#   colorize: false
+#   file: "logs/production.log"
+
+# For demo/presentation (beautiful output):
+# logging:
+#   level: "INFO"
+#   format: "modern"
+#   show_time: true
+#   colorize: true

@@ -9,6 +9,7 @@ from pathlib import Path
 import json
 
 from tinysearch.base import VectorIndexer, TextChunk
+from tinysearch.logger import get_logger, log_success, log_warning, log_error
 
 
 class FAISSIndexer(VectorIndexer):
@@ -260,7 +261,7 @@ class FAISSIndexer(VectorIndexer):
             try:
                 self._move_index_to_gpu()
             except Exception as e:
-                print(f"Failed to move index to GPU: {e}")
+                log_warning(f"Failed to move index to GPU: {e}")
     
     def _create_index(self) -> Any:
         """
@@ -344,15 +345,15 @@ class FAISSIndexer(VectorIndexer):
             
             # Check if FAISS is built with GPU support by checking for necessary functions
             if not hasattr(faiss, 'get_num_gpus'):
-                print("FAISS GPU support not detected (get_num_gpus not found)")
-                print("For GPU acceleration, install faiss-gpu package")
+                log_warning("FAISS GPU support not detected (get_num_gpus not found)")
+                log_warning("For GPU acceleration, install faiss-gpu package")
                 self.use_gpu = False
                 return target_index
-            
+
             # Check if GPUs are available
             gpu_count = faiss.get_num_gpus()
             if gpu_count <= 0:
-                print(f"No GPUs detected by FAISS (get_num_gpus returned {gpu_count})")
+                log_warning(f"No GPUs detected by FAISS (get_num_gpus returned {gpu_count})")
                 self.use_gpu = False
                 return target_index
             
@@ -363,7 +364,7 @@ class FAISSIndexer(VectorIndexer):
                 index_to_gpu_fn = getattr(faiss, 'index_cpu_to_gpu', None)
                 
                 if gpu_resources_fn is None or index_to_gpu_fn is None:
-                    print("FAISS GPU functions not available")
+                    log_warning("FAISS GPU functions not available")
                     self.use_gpu = False
                     return target_index
                 
@@ -376,18 +377,18 @@ class FAISSIndexer(VectorIndexer):
                 # only work for faiss-gpu
                 gpu_index = faiss.index_cpu_to_gpu(self._gpu_resources, 0, target_index) # type: ignore
                 
-                print("Successfully moved index to GPU")
+                log_success("Successfully moved index to GPU")
                 return gpu_index
                 
             except Exception as e:
-                print(f"Error moving index to GPU, falling back to CPU: {e}")
+                log_warning(f"Error moving index to GPU, falling back to CPU: {e}")
                 return target_index
-            
+
         except ImportError:
-            print("FAISS not installed. To use FAISS, install faiss-cpu or faiss-gpu")
+            log_error("FAISS not installed. To use FAISS, install faiss-cpu or faiss-gpu")
             return target_index
         except Exception as e:
-            print(f"Unexpected error with FAISS: {e}")
+            log_error(f"Unexpected error with FAISS: {e}")
             return target_index
     
     def add(self, vectors: List[List[float]], texts: List[TextChunk]) -> None:

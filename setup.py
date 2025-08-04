@@ -21,6 +21,7 @@ install_requires = [
     "pyyaml>=5.1.0",
     "tqdm>=4.60.0",
     "watchdog>=2.1.0",
+    "loguru>=0.6.0",
 ]
 
 extras_require = {
