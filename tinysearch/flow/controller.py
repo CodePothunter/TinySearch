@@ -7,9 +7,11 @@ import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Set, Tuple, cast, Callable
 
-from tinysearch.base import DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine
+from tinysearch.base import DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine, Retriever
 from tinysearch.base import TextChunk, FlowController as FlowControllerBase
 from tinysearch.flow.hot_update import HotUpdateManager
+from tinysearch.query.hybrid import HybridQueryEngine
+from tinysearch.retrievers.vector_retriever import VectorRetriever
 
 
 class FlowController(FlowControllerBase):
@@ -141,6 +143,9 @@ class FlowController(FlowControllerBase):
         
         # Add to index
         self.indexer.build(vectors, chunks)
+
+        # Build retriever indexes for HybridQueryEngine
+        self._build_retriever_indexes(chunks)
     
     def process_directory(self, dir_path: Union[str, Path], extensions: Optional[List[str]] = None, 
                          recursive: bool = True, force_reprocess: bool = False) -> None:
@@ -200,31 +205,75 @@ class FlowController(FlowControllerBase):
         else:
             self.process_file(data_path, force_reprocess=force_reprocess)
     
+    def _get_hybrid_retrievers(self) -> List[Retriever]:
+        """Get retrievers from HybridQueryEngine, if applicable"""
+        if isinstance(self.query_engine, HybridQueryEngine):
+            return self.query_engine.retrievers
+        return []
+
+    def _build_retriever_indexes(self, chunks: List[TextChunk]) -> None:
+        """Build indexes for non-vector retrievers in HybridQueryEngine"""
+        for retriever in self._get_hybrid_retrievers():
+            # Skip VectorRetriever - it's already handled by self.indexer.build()
+            if isinstance(retriever, VectorRetriever):
+                continue
+            retriever.build(chunks)
+
     def save_index(self, path: Optional[Union[str, Path]] = None) -> None:
         """
-        Save the built index to disk
-        
+        Save the built index to disk.
+        Also saves retriever indexes for HybridQueryEngine.
+
         Args:
             path: Path to save the index to, if None use the config path
         """
         if path is None:
             path = self.config.get("indexer", {}).get("index_path", "index.faiss")
-        
-        # Use cast to ensure type safety for optional path
+
+        # Save the main vector index
         self.indexer.save(cast(Union[str, Path], path))
-    
+
+        # Save non-vector retriever indexes
+        self._save_retriever_indexes(Path(str(path)))
+
+    def _save_retriever_indexes(self, base_path: Path) -> None:
+        """Save indexes for non-vector retrievers alongside the main index"""
+        index_dir = base_path.parent if base_path.suffix else base_path
+        for retriever in self._get_hybrid_retrievers():
+            if isinstance(retriever, VectorRetriever):
+                continue
+            # Derive subdirectory name from retriever class
+            retriever_name = type(retriever).__name__.lower().replace("retriever", "")
+            retriever_path = index_dir / f"{retriever_name}_index"
+            retriever.save(retriever_path)
+
     def load_index(self, path: Optional[Union[str, Path]] = None) -> None:
         """
-        Load an index from disk
-        
+        Load an index from disk.
+        Also loads retriever indexes for HybridQueryEngine.
+
         Args:
             path: Path to load the index from, if None use the config path
         """
         if path is None:
             path = self.config.get("indexer", {}).get("index_path", "index.faiss")
-        
-        # Use cast to ensure type safety for optional path
+
+        # Load the main vector index
         self.indexer.load(cast(Union[str, Path], path))
+
+        # Load non-vector retriever indexes
+        self._load_retriever_indexes(Path(str(path)))
+
+    def _load_retriever_indexes(self, base_path: Path) -> None:
+        """Load indexes for non-vector retrievers"""
+        index_dir = base_path.parent if base_path.suffix else base_path
+        for retriever in self._get_hybrid_retrievers():
+            if isinstance(retriever, VectorRetriever):
+                continue
+            retriever_name = type(retriever).__name__.lower().replace("retriever", "")
+            retriever_path = index_dir / f"{retriever_name}_index"
+            if retriever_path.exists():
+                retriever.load(retriever_path)
     
     def query(self, query_text: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """

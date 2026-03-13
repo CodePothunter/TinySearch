@@ -1,13 +1,17 @@
 # TinySearch
 
-**A lightweight vector search and retrieval system for document understanding, semantic search, and text information retrieval.**
+**A lightweight hybrid search and retrieval system for document understanding, semantic search, and text information retrieval.**
 
-TinySearch provides an end-to-end solution for converting documents into searchable vector embeddings, with a focus on simplicity, flexibility, and efficiency. Perfect for building RAG (Retrieval-Augmented Generation) systems, semantic document search, knowledge bases, and more.
+TinySearch provides an end-to-end solution for converting documents into searchable vector embeddings, with support for hybrid multi-retriever search (Vector + BM25 + Substring). Focused on simplicity, flexibility, and efficiency. Perfect for building RAG (Retrieval-Augmented Generation) systems, semantic document search, knowledge bases, and more.
 
 ## Key Features
 
 - 🧩 **Modular Design**: Plug-and-play components for data processing, text splitting, embedding generation, and vector retrieval
 - 🔍 **Semantic Search**: Find contextually relevant information beyond keyword matching
+- 🔀 **Hybrid Retrieval**: Combine Vector, BM25, and Substring retrievers with configurable fusion strategies (RRF, Weighted)
+- 📝 **BM25 Keyword Search**: Fast keyword-based retrieval with jieba Chinese tokenization support
+- 🔤 **Substring/Regex Search**: Ctrl+F style exact match and regex pattern search
+- 🏆 **Cross-Encoder Reranking**: Optional reranking with BGE Reranker for improved relevance
 - ⚙️ **Highly Configurable**: Simple YAML configuration to control all aspects of the system
 - 🔌 **Multiple Input Formats**: Support for TXT, PDF, CSV, Markdown, JSON, and custom adapters
 - 🤖 **Embedding Models**: Integration with HuggingFace models like Qwen-Embedding and more
@@ -29,55 +33,63 @@ flowchart TB
     subgraph Input
         Documents["Documents<br/>(PDF, Text, CSV, JSON, etc.)"]
     end
-    
+
     subgraph DataProcessing["Data Processing"]
         DataAdapter["DataAdapter<br/>Extract text from data source"]
         TextSplitter["TextSplitter<br/>Chunk text into segments"]
-        Embedder["Embedder<br/>Generate vector embeddings"]
     end
-    
-    subgraph IndexLayer["Index Layer"]
-        VectorIndexer["VectorIndexer<br/>Build and maintain FAISS index"]
-        IndexStorage["Index Storage<br/>(FAISS Index + Original Text)"]
+
+    subgraph RetrieverLayer["Retriever Layer"]
+        VectorRetriever["VectorRetriever<br/>Embedder + FAISS"]
+        BM25Retriever["BM25Retriever<br/>bm25s + jieba"]
+        SubstringRetriever["SubstringRetriever<br/>Regex / exact match"]
     end
-    
+
+    subgraph FusionLayer["Fusion & Reranking"]
+        FusionStrategy["FusionStrategy<br/>(RRF / Weighted)"]
+        Reranker["Reranker (optional)<br/>Cross-Encoder BGE"]
+    end
+
     subgraph QueryLayer["Query Layer"]
         UserQuery["User Query"]
-        QueryEngine["QueryEngine<br/>Process and reformat query"]
+        QueryEngine["QueryEngine<br/>Template / Hybrid"]
         SearchResults["Search Results<br/>Ranked by relevance"]
     end
-    
+
     subgraph FlowControl["Flow Control"]
         Config["Configuration"]
         FlowController["FlowController<br/>Orchestrate data flow"]
     end
-    
+
     subgraph API["API Layer"]
         CLI["Command Line Interface"]
         FastAPI["FastAPI Web Service"]
     end
-    
+
     %% Data Flow - Indexing
     Documents --> DataAdapter
     DataAdapter --> TextSplitter
-    TextSplitter --> Embedder
-    Embedder --> VectorIndexer
-    VectorIndexer --> IndexStorage
-    
+    TextSplitter --> VectorRetriever
+    TextSplitter --> BM25Retriever
+    TextSplitter --> SubstringRetriever
+
     %% Data Flow - Querying
     UserQuery --> QueryEngine
-    QueryEngine --> Embedder
-    Embedder --> VectorIndexer
-    VectorIndexer --> SearchResults
-    
+    QueryEngine --> VectorRetriever
+    QueryEngine --> BM25Retriever
+    QueryEngine --> SubstringRetriever
+    VectorRetriever --> FusionStrategy
+    BM25Retriever --> FusionStrategy
+    SubstringRetriever --> FusionStrategy
+    FusionStrategy --> Reranker
+    Reranker --> SearchResults
+
     %% Control Flow
     Config --> FlowController
     FlowController --> DataAdapter
     FlowController --> TextSplitter
-    FlowController --> Embedder
-    FlowController --> VectorIndexer
     FlowController --> QueryEngine
-    
+
     %% API Flow
     CLI --> FlowController
     FastAPI --> FlowController
@@ -152,8 +164,14 @@ For API documentation, see [API Guide](docs/api.md) and [API Authentication Guid
 ## Installation
 
 ```bash
-# Basic installation
+# Basic installation (vector search only)
 pip install tinysearch
+
+# With hybrid search (BM25 + Chinese tokenization)
+pip install tinysearch bm25s jieba
+
+# With cross-encoder reranking
+pip install tinysearch FlagEmbedding
 
 # With API support
 pip install tinysearch[api]
@@ -195,7 +213,7 @@ indexer:
   type: faiss
   index_path: .cache/index.faiss
   metric: cosine
-  
+
 query_engine:
   method: template
   template: "Please find information about: {query}"
@@ -225,6 +243,118 @@ Then visit http://localhost:8000 in your browser to use the web interface, or se
 ```bash
 curl -X POST http://localhost:8000/query -H "Content-Type: application/json" -d '{"query": "Your search query", "top_k": 5}'
 ```
+
+## Hybrid Search
+
+TinySearch supports hybrid retrieval that combines multiple search strategies for better recall and precision. You can mix Vector (semantic), BM25 (keyword), and Substring (exact match) retrievers, then fuse their results using RRF or Weighted fusion.
+
+### Hybrid Search Configuration
+
+To enable hybrid search, set `query_engine.method` to `"hybrid"` and configure the `retrievers` list:
+
+```yaml
+# Embedding + Vector index (required for vector retriever)
+embedder:
+  model: Qwen/Qwen3-Embedding-0.6B
+  device: cuda
+indexer:
+  type: faiss
+  index_path: .cache/index.faiss
+  metric: cosine
+
+# Multi-retriever configuration
+retrievers:
+  - type: vector          # Semantic search (uses embedder + indexer above)
+  - type: bm25            # Keyword search
+    tokenizer: jieba       # Chinese tokenization (optional, fallback: whitespace)
+  - type: substring        # Exact match / regex
+    is_regex: false
+
+# Fusion strategy
+fusion:
+  strategy: weighted       # "weighted" or "rrf"
+  weights: [0.5, 0.4, 0.1]  # Weights for each retriever (vector, bm25, substring)
+  min_score: 0.1           # Drop results below this fused score
+
+# Optional: Cross-encoder reranking
+reranker:
+  enabled: false
+  model: BAAI/bge-reranker-v2-m3
+
+# Query engine
+query_engine:
+  method: hybrid           # "template" (vector only) or "hybrid"
+  top_k: 20
+  recall_multiplier: 2     # Each retriever recalls top_k * 2 candidates before fusion
+```
+
+### Fusion Strategies
+
+| Strategy | Description | Best For |
+|----------|-------------|----------|
+| **weighted** | Min-max normalize scores, then weighted sum | When you know relative retriever importance |
+| **rrf** | Reciprocal Rank Fusion: `score = Σ 1/(rank + k)` | When score distributions differ (more robust) |
+
+### Programmatic Usage
+
+```python
+from tinysearch.base import TextChunk
+from tinysearch.retrievers import VectorRetriever, BM25Retriever, SubstringRetriever
+from tinysearch.fusion import WeightedFusion, ReciprocalRankFusion
+from tinysearch.query import HybridQueryEngine
+
+# Build retrievers
+bm25 = BM25Retriever()
+bm25.build(chunks)  # chunks: List[TextChunk]
+
+substr = SubstringRetriever(is_regex=False)
+substr.build(chunks)
+
+# Create hybrid engine
+engine = HybridQueryEngine(
+    retrievers=[bm25, substr],
+    fusion_strategy=WeightedFusion(weights=[0.7, 0.3]),
+    recall_multiplier=2,
+)
+
+results = engine.retrieve("搜索关键词", top_k=10)
+# Each result: {"text", "metadata", "score", "retrieval_method": "hybrid", "scores": {...}}
+```
+
+### Result Format
+
+Hybrid search results include per-retriever scores for transparency:
+
+```python
+{
+    "text": "...",               # Chunk text
+    "metadata": {...},           # Source metadata
+    "score": 0.85,               # Final fused score [0, 1]
+    "retrieval_method": "hybrid",
+    "scores": {                  # Per-retriever original scores
+        "vector": 0.92,
+        "bm25": 0.75,
+    }
+}
+```
+
+### Optional Dependencies for Hybrid Search
+
+| Package | Purpose | Required? |
+|---------|---------|-----------|
+| `bm25s` | BM25 retrieval engine | Only for BM25Retriever |
+| `jieba` | Chinese tokenization | Optional (fallback: whitespace split) |
+| `FlagEmbedding` | Cross-encoder reranking | Optional (only for reranker) |
+
+Install with:
+```bash
+pip install bm25s jieba              # For BM25 + Chinese support
+pip install FlagEmbedding            # For cross-encoder reranking
+```
+
+### Backward Compatibility
+
+If you don't configure `retrievers` or keep `query_engine.method: "template"`, TinySearch behaves exactly as before — pure vector search with no additional dependencies.
 
 ## Examples
 
@@ -426,4 +556,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Keywords
 
-vector search, semantic search, document retrieval, embeddings, FAISS, RAG, information retrieval, text search, vector database, document understanding, NLP, natural language processing, AI search
+vector search, semantic search, hybrid search, BM25, document retrieval, embeddings, FAISS, RAG, information retrieval, text search, vector database, document understanding, NLP, natural language processing, AI search, reranking, fusion

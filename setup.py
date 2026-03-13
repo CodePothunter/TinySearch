@@ -42,6 +42,13 @@ extras_require = {
     "indexers": [
         "faiss-cpu>=1.7.0",
     ],
+    "hybrid": [
+        "bm25s>=0.1.0",
+        "jieba>=0.42.0",
+    ],
+    "reranker": [
+        "FlagEmbedding>=1.0.0",
+    ],
     "dev": [
         "pytest>=6.0.0",
         "black>=21.5b2",
@@ -64,7 +71,7 @@ setup(
     version=version.get("__version__", "0.1.0"),
     author="TinySearch Team",
     author_email="tinysearch@example.com",
-    description="A lightweight vector retrieval system",
+    description="A lightweight hybrid search and retrieval system (Vector + BM25 + Substring)",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/tinysearch",

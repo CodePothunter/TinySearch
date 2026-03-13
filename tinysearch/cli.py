@@ -10,13 +10,23 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Union, Type, cast
 
 from .config import Config
-from .base import DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine
+from .base import (
+    DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine,
+    Retriever, FusionStrategy, Reranker,
+)
 from .adapters import TextAdapter, PDFAdapter, CSVAdapter, MarkdownAdapter, JSONAdapter
 from .splitters import CharacterTextSplitter
 from .embedders import HuggingFaceEmbedder
 # 直接从模块导入
 from .indexers.faiss_indexer import FAISSIndexer
 from .query.template import TemplateQueryEngine
+from .query.hybrid import HybridQueryEngine
+from .retrievers.vector_retriever import VectorRetriever
+from .retrievers.bm25_retriever import BM25Retriever
+from .retrievers.substring_retriever import SubstringRetriever
+from .fusion.rrf import ReciprocalRankFusion
+from .fusion.weighted import WeightedFusion
+from .rerankers.cross_encoder import CrossEncoderReranker
 from .logger import get_logger, configure_logger, log_step, log_progress, log_success, log_error
 
 
@@ -137,25 +147,132 @@ def load_indexer(config: Config) -> FAISSIndexer:
         raise ValueError(f"Unsupported indexer type: {indexer_type}")
 
 
+def load_retriever(config: Config, retriever_config: Dict[str, Any], embedder: Embedder, indexer: FAISSIndexer) -> Retriever:
+    """
+    Load a single retriever based on its config dict.
+
+    Args:
+        config: Global configuration object
+        retriever_config: Dict like {"type": "vector"} or {"type": "bm25", "tokenizer": "jieba"}
+        embedder: Embedder instance (used by vector retriever)
+        indexer: FAISSIndexer instance (used by vector retriever)
+
+    Returns:
+        Retriever instance
+    """
+    rtype = retriever_config.get("type", "vector")
+
+    if rtype == "vector":
+        return VectorRetriever(
+            embedder=embedder,
+            indexer=indexer,
+            query_template=config.get("query_engine.template"),
+        )
+    elif rtype == "bm25":
+        tokenizer_name = retriever_config.get("tokenizer", "default")
+        tokenizer = None  # use default
+        if tokenizer_name == "jieba":
+            try:
+                import jieba
+                tokenizer = lambda text: list(jieba.cut(text.lower()))
+            except ImportError:
+                pass  # fallback to default
+        return BM25Retriever(tokenizer=tokenizer)
+    elif rtype == "substring":
+        return SubstringRetriever(
+            is_regex=retriever_config.get("is_regex", False),
+        )
+    else:
+        raise ValueError(f"Unsupported retriever type: {rtype}")
+
+
+def load_retrievers(config: Config, embedder: Embedder, indexer: FAISSIndexer) -> List[Retriever]:
+    """
+    Load all configured retrievers.
+
+    Returns:
+        List of Retriever instances
+    """
+    retriever_configs = config.get("retrievers", [{"type": "vector"}])
+    return [
+        load_retriever(config, rc, embedder, indexer)
+        for rc in retriever_configs
+    ]
+
+
+def load_fusion(config: Config) -> FusionStrategy:
+    """
+    Load a fusion strategy based on configuration.
+
+    Returns:
+        FusionStrategy instance
+    """
+    strategy = config.get("fusion.strategy", "weighted")
+    if strategy == "rrf":
+        return ReciprocalRankFusion(
+            k=config.get("fusion.k", 60),
+        )
+    elif strategy == "weighted":
+        return WeightedFusion(
+            weights=config.get("fusion.weights"),
+            min_score=config.get("fusion.min_score", 0.0),
+        )
+    else:
+        raise ValueError(f"Unsupported fusion strategy: {strategy}")
+
+
+def load_reranker(config: Config) -> Optional[Reranker]:
+    """
+    Load a reranker if enabled in configuration.
+
+    Returns:
+        Reranker instance or None
+    """
+    if not config.get("reranker.enabled", False):
+        return None
+
+    return CrossEncoderReranker(
+        model_name=config.get("reranker.model", "BAAI/bge-reranker-v2-m3"),
+        device=config.get("reranker.device"),
+        batch_size=config.get("reranker.batch_size", 64),
+        max_length=config.get("reranker.max_length", 512),
+        use_fp16=config.get("reranker.use_fp16", True),
+    )
+
+
 def load_query_engine(config: Config, embedder: Embedder, indexer: FAISSIndexer) -> QueryEngine:
     """
-    Load a query engine based on configuration
-    
+    Load a query engine based on configuration.
+
+    Supports:
+    - "template": Original TemplateQueryEngine (backward compatible)
+    - "hybrid": HybridQueryEngine with multi-retriever fusion
+
     Args:
         config: Configuration object
         embedder: Embedder instance
         indexer: FAISSIndexer instance
-        
+
     Returns:
         QueryEngine instance
     """
     query_engine_type = config.get("query_engine.method", "template")
-    
+
     if query_engine_type == "template":
         return TemplateQueryEngine(
             embedder=embedder,
             indexer=indexer,
             template=config.get("query_engine.template", "请帮我查找：{query}")
+        )
+    elif query_engine_type == "hybrid":
+        retrievers = load_retrievers(config, embedder, indexer)
+        fusion = load_fusion(config)
+        reranker = load_reranker(config)
+        return HybridQueryEngine(
+            retrievers=retrievers,
+            fusion_strategy=fusion,
+            reranker=reranker,
+            recall_multiplier=config.get("query_engine.recall_multiplier", 2),
         )
     else:
         raise ValueError(f"Unsupported query engine type: {query_engine_type}")

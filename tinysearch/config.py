@@ -42,10 +42,21 @@ class Config:
                 "index_path": ".cache/index.faiss",
                 "metric": "cosine"
             },
+            "retrievers": [
+                {"type": "vector"}
+            ],
+            "fusion": {
+                "strategy": "weighted",
+                "weights": [1.0],
+            },
+            "reranker": {
+                "enabled": False,
+            },
             "query_engine": {
                 "method": "template",
                 "template": "请帮我查找：{query}",
-                "top_k": 5
+                "top_k": 5,
+                "recall_multiplier": 2,
             },
             "flow": {
                 "use_cache": True,
