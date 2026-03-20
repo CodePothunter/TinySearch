@@ -237,8 +237,9 @@ class FlowController(FlowControllerBase):
         self._save_retriever_indexes(Path(str(path)))
 
     def _save_retriever_indexes(self, base_path: Path) -> None:
-        """Save indexes for non-vector retrievers alongside the main index"""
-        index_dir = base_path.parent if base_path.suffix else base_path
+        """Save indexes for non-vector retrievers inside the FAISS index directory"""
+        # FAISS saves into base_path.with_suffix('') (e.g. "index.faiss" → "index/")
+        index_dir = base_path.with_suffix('') if base_path.suffix else base_path
         for retriever in self._get_hybrid_retrievers():
             if isinstance(retriever, VectorRetriever):
                 continue
@@ -265,8 +266,8 @@ class FlowController(FlowControllerBase):
         self._load_retriever_indexes(Path(str(path)))
 
     def _load_retriever_indexes(self, base_path: Path) -> None:
-        """Load indexes for non-vector retrievers"""
-        index_dir = base_path.parent if base_path.suffix else base_path
+        """Load indexes for non-vector retrievers from the FAISS index directory"""
+        index_dir = base_path.with_suffix('') if base_path.suffix else base_path
         for retriever in self._get_hybrid_retrievers():
             if isinstance(retriever, VectorRetriever):
                 continue
@@ -291,7 +292,7 @@ class FlowController(FlowControllerBase):
             top_k = self.config.get("query_engine", {}).get("top_k", 5)
             
         # Use cast to ensure type safety for optional top_k
-        return self.query_engine.retrieve(query_text, cast(int, top_k))
+        return self.query_engine.retrieve(query_text, cast(int, top_k), **kwargs)
     
     def clear_cache(self) -> None:
         """Clear all cached data"""

@@ -57,6 +57,8 @@ class Config:
                 "template": "请帮我查找：{query}",
                 "top_k": 5,
                 "recall_multiplier": 2,
+                "min_scores": None,
+                "filter_multiplier": 3,
             },
             "flow": {
                 "use_cache": True,

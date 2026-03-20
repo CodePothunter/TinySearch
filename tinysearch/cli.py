@@ -273,9 +273,71 @@ def load_query_engine(config: Config, embedder: Embedder, indexer: FAISSIndexer)
             fusion_strategy=fusion,
             reranker=reranker,
             recall_multiplier=config.get("query_engine.recall_multiplier", 2),
+            min_scores=config.get("query_engine.min_scores", None),
+            filter_multiplier=config.get("query_engine.filter_multiplier", 3),
         )
     else:
         raise ValueError(f"Unsupported query engine type: {query_engine_type}")
+
+
+def _get_retriever_index_dir(index_path: Path) -> Path:
+    """Derive the retriever index directory from the FAISS index path.
+
+    FAISS saves into ``index_path.with_suffix('')`` (e.g. ``index.faiss`` →
+    ``index/``).  Non-vector retriever indexes are stored as subdirectories
+    inside the same directory so they stay together with the FAISS index.
+    """
+    return index_path.with_suffix('') if index_path.suffix else index_path
+
+
+def _build_hybrid_retriever_indexes(
+    query_engine: QueryEngine, chunks, logger=None,
+) -> None:
+    """Build BM25 / Substring indexes when the engine is a HybridQueryEngine."""
+    if not isinstance(query_engine, HybridQueryEngine):
+        return
+    for retriever in query_engine.retrievers:
+        if isinstance(retriever, VectorRetriever):
+            continue  # already covered by FAISS indexer.build()
+        rname = type(retriever).__name__
+        if logger:
+            log_step(f"Building {rname} index")
+        retriever.build(chunks)
+
+
+def _save_hybrid_retriever_indexes(
+    query_engine: QueryEngine, index_path: Path, logger=None,
+) -> None:
+    """Save non-vector retriever indexes alongside the FAISS index."""
+    if not isinstance(query_engine, HybridQueryEngine):
+        return
+    index_dir = _get_retriever_index_dir(index_path)
+    for retriever in query_engine.retrievers:
+        if isinstance(retriever, VectorRetriever):
+            continue
+        rname = type(retriever).__name__.lower().replace("retriever", "")
+        rpath = index_dir / f"{rname}_index"
+        if logger:
+            log_step(f"Saving {type(retriever).__name__} index to {rpath}")
+        retriever.save(rpath)
+
+
+def _load_hybrid_retriever_indexes(
+    query_engine: QueryEngine, index_path: Path, logger=None,
+) -> None:
+    """Load non-vector retriever indexes from alongside the FAISS index."""
+    if not isinstance(query_engine, HybridQueryEngine):
+        return
+    index_dir = _get_retriever_index_dir(index_path)
+    for retriever in query_engine.retrievers:
+        if isinstance(retriever, VectorRetriever):
+            continue
+        rname = type(retriever).__name__.lower().replace("retriever", "")
+        rpath = index_dir / f"{rname}_index"
+        if rpath.exists():
+            if logger:
+                log_step(f"Loading {type(retriever).__name__} index from {rpath}")
+            retriever.load(rpath)
 
 
 def build_index(args: argparse.Namespace, config: Config) -> None:
@@ -294,15 +356,36 @@ def build_index(args: argparse.Namespace, config: Config) -> None:
     splitter = load_splitter(config)
     embedder = load_embedder(config)
     indexer = load_indexer(config)
+    query_engine = load_query_engine(config, embedder, indexer)
 
-    # Extract text from data source
+    # Extract text from data source with per-file source metadata.
+    # When args.data is a directory, process each file individually so that
+    # every text gets its actual file path as "source" — not just the
+    # directory name.  This prevents fusion dedup key collisions between
+    # chunks from different files that happen to share the same text.
     log_step("Extracting text")
-    texts = adapter.extract(args.data)
+    data_path = Path(args.data)
+    texts: list = []
+    metadata: list = []
+    if data_path.is_dir():
+        for child in sorted(data_path.rglob("*")):
+            if not child.is_file():
+                continue
+            try:
+                file_texts = adapter.extract(child)
+            except Exception:
+                continue  # adapter will skip unsupported extensions
+            for t in file_texts:
+                texts.append(t)
+                metadata.append({"source": str(child)})
+    else:
+        texts = adapter.extract(args.data)
+        metadata = [{"source": str(data_path)} for _ in range(len(texts))]
     logger.info(f"📄 Extracted {len(texts)} documents")
 
     # Split text into chunks
     log_step("Splitting text into chunks")
-    chunks = splitter.split(texts)
+    chunks = splitter.split(texts, metadata)
     logger.info(f"✂️  Created {len(chunks)} text chunks")
 
     # Generate embeddings
@@ -310,14 +393,20 @@ def build_index(args: argparse.Namespace, config: Config) -> None:
     vectors = embedder.embed([chunk.text for chunk in chunks])
     logger.info(f"🧠 Generated {len(vectors)} embedding vectors")
 
-    # Build index
+    # Build FAISS index
     log_step("Building index")
     indexer.build(vectors, chunks)
 
-    # Save index
+    # Build non-vector retriever indexes (BM25, Substring) for hybrid mode
+    _build_hybrid_retriever_indexes(query_engine, chunks, logger)
+
+    # Save FAISS index
     index_path = Path(config.get("indexer.index_path", "index.faiss"))
     log_step(f"Saving index to {index_path}")
     indexer.save(index_path)
+
+    # Save non-vector retriever indexes
+    _save_hybrid_retriever_indexes(query_engine, index_path, logger)
 
     log_success("Index built successfully")
 
@@ -337,10 +426,13 @@ def query_index(args: argparse.Namespace, config: Config) -> None:
     indexer = load_indexer(config)
     query_engine = load_query_engine(config, embedder, indexer)
 
-    # Load index
+    # Load FAISS index
     index_path = Path(config.get("indexer.index_path", "index.faiss"))
     log_step(f"Loading index from {index_path}")
     indexer.load(index_path)
+
+    # Load non-vector retriever indexes (BM25, Substring) for hybrid mode
+    _load_hybrid_retriever_indexes(query_engine, index_path, logger)
 
     # Process query
     query = args.q

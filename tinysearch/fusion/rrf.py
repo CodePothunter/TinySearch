@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Any, Dict, List
 
 from tinysearch.base import FusionStrategy
+from tinysearch.fusion._utils import make_doc_key
 
 
 class ReciprocalRankFusion(FusionStrategy):
@@ -42,7 +43,7 @@ class ReciprocalRankFusion(FusionStrategy):
 
         for result_list in results_list:
             for rank, result in enumerate(result_list):
-                doc_key = result["text"]
+                doc_key = make_doc_key(result)
                 rrf_score = 1.0 / (rank + self.k)
                 rrf_scores[doc_key] += rrf_score
 

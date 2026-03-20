@@ -54,7 +54,7 @@ class TemplateQueryEngine(QueryEngine):
                 # If all else fails, just concatenate
                 return f"{self.template} {query}"
     
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """
         Retrieve relevant chunks for a query
         

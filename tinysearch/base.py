@@ -152,14 +152,15 @@ class QueryEngine(ABC):
         pass
     
     @abstractmethod
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """
         Retrieve relevant chunks for a query
-        
+
         Args:
             query: Query string
             top_k: Number of results to return
-            
+            **kwargs: Engine-specific parameters (e.g. filters, weights)
+
         Returns:
             List of dictionaries containing text chunks and similarity scores
         """

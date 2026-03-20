@@ -19,7 +19,10 @@ from pydantic import BaseModel, Field
 import tempfile
 
 from .config import Config
-from .cli import load_embedder, load_indexer, load_query_engine, load_adapter, load_splitter
+from .cli import (
+    load_embedder, load_indexer, load_query_engine, load_adapter, load_splitter,
+    _load_hybrid_retriever_indexes,
+)
 from .flow.controller import FlowController
 from .logger import get_logger, configure_logger, log_success, log_warning, log_error
 
@@ -177,6 +180,8 @@ def initialize_components():
         logger = get_logger("api_init")
         if Path(index_path).exists():
             indexer.load(index_path)
+            # Load non-vector retriever indexes (BM25, Substring) for hybrid mode
+            _load_hybrid_retriever_indexes(query_engine, Path(index_path), logger)
             log_success(f"TinySearch initialized with index: {index_path}")
         else:
             log_warning(f"Index not found: {index_path}")
@@ -409,8 +414,11 @@ async def query(
         raise HTTPException(status_code=500, detail="TinySearch not initialized")
     
     try:
-        # Execute query
-        results = query_engine.retrieve(query_request.query, top_k=query_request.top_k)
+        # Execute query — forward params (filters, weights, etc.) to the engine
+        extra_params = query_request.params or {}
+        results = query_engine.retrieve(
+            query_request.query, top_k=query_request.top_k, **extra_params
+        )
         
         # Format results
         matches = []

@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from tinysearch.base import FusionStrategy
+from tinysearch.fusion._utils import make_doc_key
 
 
 class WeightedFusion(FusionStrategy):
@@ -77,7 +78,7 @@ class WeightedFusion(FusionStrategy):
 
         for i, (result_list, weight) in enumerate(zip(normalized_lists, weights)):
             for result in result_list:
-                doc_key = result["text"]
+                doc_key = make_doc_key(result)
                 doc_scores[doc_key] += result["_norm_score"] * weight
 
                 method = result.get("retrieval_method", "unknown")
