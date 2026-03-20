@@ -92,12 +92,17 @@ class FAISSIndexer(VectorIndexer):
         # Create ID mapping
         self.ids_map = {i: i for i in range(len(texts))}
     
-    def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query_vector: List[float], top_k: int = 5,
+               candidate_ids: Optional[set] = None) -> List[Dict[str, Any]]:
         """
-        Search the index for vectors similar to the query vector
+        Search the index for vectors similar to the query vector.
+
         Args:
             query_vector: Query embedding vector
             top_k: Number of results to return
+            candidate_ids: Optional set of chunk indices to restrict search to.
+                          When provided, over-retrieves then filters by membership.
+
         Returns:
             List of dictionaries containing text chunks, similarity scores, and embedding vectors
         """
@@ -115,8 +120,16 @@ class FAISSIndexer(VectorIndexer):
         # Normalize query vector if using cosine similarity
         if self.metric == "cosine":
             faiss.normalize_L2(query_np)
+
+        # When candidate_ids is set, over-recall then filter
+        if candidate_ids is not None:
+            effective_k = min(self.index.ntotal, top_k * 3)
+        else:
+            effective_k = top_k
+
         # Search index
-        distances, indices = self.index.search(query_np, top_k)
+        distances, indices = self.index.search(query_np, effective_k)
+
         # Convert to result format
         results = []
         for i in range(len(indices[0])):
@@ -124,6 +137,9 @@ class FAISSIndexer(VectorIndexer):
             distance = distances[0][i]
             # Skip invalid indices (can happen if there are fewer results than top_k)
             if idx < 0 or idx >= len(self.texts):
+                continue
+            # Pre-filter: skip if not in candidate set
+            if candidate_ids is not None and idx not in candidate_ids:
                 continue
             # Map to original text chunk
             text_idx = self.ids_map[idx]
@@ -146,6 +162,8 @@ class FAISSIndexer(VectorIndexer):
                 "score": similarity,
                 "embedding": embedding
             })
+            if candidate_ids is not None and len(results) >= top_k:
+                break
         return results
     
     def save(self, path: Union[str, Path]) -> None:

@@ -55,22 +55,13 @@ class MarkdownAdapter(DataAdapter):
             raise FileNotFoundError(f"File not found: {filepath}")
         
         if filepath.is_dir():
-            # If a directory is provided, process all Markdown files in it
-            md_files = []
-            for ext in [".md", ".markdown", ".mdown", ".mkdn"]:
-                md_files.extend(filepath.glob(f"**/*{ext}"))
-            
-            result = []
-            for file in md_files:
-                try:
-                    result.extend(self._extract_from_markdown(file))
-                except Exception as e:
-                    print(f"Error reading {file}: {e}")
-            
-            return result
-        else:
-            # Process a single file
-            return self._extract_from_markdown(filepath)
+            raise ValueError(
+                f"MarkdownAdapter.extract() does not accept directories. "
+                "Use iter_input_files() to iterate files, then call extract() on each."
+            )
+
+        # Process a single file
+        return self._extract_from_markdown(filepath)
     
     def _extract_from_markdown(self, filepath: Path) -> List[str]:
         """

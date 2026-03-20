@@ -33,11 +33,20 @@ class SubstringRetriever(Retriever):
         """Store chunks in memory for substring search"""
         self._chunks = list(chunks)
 
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Search chunks using regex/substring matching"""
+    def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Search chunks using regex/substring matching.
+
+        Args:
+            query: Query string or regex pattern
+            top_k: Number of results to return
+            **kwargs:
+                candidate_ids: Optional Set[int] of chunk indices to restrict search to
+        """
         if not self._chunks or not query:
             return []
 
+        candidate_ids = kwargs.get("candidate_ids")
         results = []
 
         try:
@@ -46,7 +55,9 @@ class SubstringRetriever(Retriever):
             else:
                 pattern = re.compile(re.escape(query), re.IGNORECASE)
 
-            for chunk in self._chunks:
+            for i, chunk in enumerate(self._chunks):
+                if candidate_ids is not None and i not in candidate_ids:
+                    continue
                 match = pattern.search(chunk.text)
                 if match:
                     score = self._calculate_match_score(match, chunk.text)

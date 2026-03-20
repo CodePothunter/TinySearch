@@ -433,14 +433,16 @@ The TinySearch Web UI provides an intuitive interface for interacting with the s
 
 ## Custom Data Adapters
 
-You can create custom data adapters by implementing the `DataAdapter` interface:
+You can create custom data adapters by implementing the `DataAdapter` interface.
+Each adapter handles **single file** extraction — directory traversal is handled
+automatically by the framework:
 
 ```python
 from tinysearch.base import DataAdapter
 
 class MyAdapter(DataAdapter):
     def extract(self, filepath):
-        # Your code to extract text from the file
+        # Extract text from a single file
         return [text1, text2, ...]
 ```
 
@@ -454,6 +456,38 @@ adapter:
     class: MyAdapter
     init:
       param1: value1
+```
+
+## Directory Indexing
+
+When building an index from a directory, TinySearch uses a centralized file
+discovery mechanism (`iter_input_files()`). Each adapter type has default
+file extensions:
+
+| Adapter | Extensions |
+|---------|-----------|
+| text | `.txt`, `.text`, `.md`, `.py`, `.js`, `.html`, `.css`, `.json` |
+| pdf | `.pdf` |
+| csv | `.csv` |
+| markdown | `.md`, `.markdown`, `.mdown`, `.mkdn` |
+| json | `.json` |
+
+You can override extensions in `config.yaml`:
+
+```yaml
+adapter:
+  type: text
+  params:
+    extensions: [".txt", ".log"]
+```
+
+Or use `iter_input_files()` programmatically:
+
+```python
+from tinysearch.utils.file_discovery import iter_input_files
+
+for file_path in iter_input_files("./data", adapter_type="text"):
+    texts = adapter.extract(file_path)
 ```
 
 ## Modern Logging System

@@ -55,20 +55,13 @@ class CSVAdapter(DataAdapter):
             raise FileNotFoundError(f"File not found: {filepath}")
         
         if filepath.is_dir():
-            # If a directory is provided, process all CSV files in it
-            csv_files = list(filepath.glob("**/*.csv"))
-            
-            result = []
-            for file in csv_files:
-                try:
-                    result.extend(self._extract_from_csv(file))
-                except Exception as e:
-                    print(f"Error reading {file}: {e}")
-            
-            return result
-        else:
-            # Process a single file
-            return self._extract_from_csv(filepath)
+            raise ValueError(
+                f"CSVAdapter.extract() does not accept directories. "
+                "Use iter_input_files() to iterate files, then call extract() on each."
+            )
+
+        # Process a single file
+        return self._extract_from_csv(filepath)
     
     def _extract_from_csv(self, filepath: Path) -> List[str]:
         """

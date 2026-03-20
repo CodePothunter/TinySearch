@@ -6,9 +6,11 @@ from typing import Union
 
 # Make the FAISS indexer available from the root module
 from .faiss_indexer import FAISSIndexer
+from .metadata_index import MetadataIndex
 
 __all__ = [
-    "FAISSIndexer"
+    "FAISSIndexer",
+    "MetadataIndex",
 ] 
 
 def index_exists(path: Union[str, Path]) -> bool:

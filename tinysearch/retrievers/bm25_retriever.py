@@ -84,18 +84,31 @@ class BM25Retriever(Retriever):
         self._index = bm25s.BM25()
         self._index.index(self._corpus_tokens)
 
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Retrieve documents using BM25 keyword matching"""
+    def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Retrieve documents using BM25 keyword matching.
+
+        Args:
+            query: Query string
+            top_k: Number of results to return
+            **kwargs:
+                candidate_ids: Optional Set[int] of chunk indices to restrict search to
+        """
         if self._index is None:
             return []
+
+        candidate_ids = kwargs.get("candidate_ids")
 
         # Tokenize query
         query_tokens = self.tokenizer(query)
         if not query_tokens:
             return []
 
-        # Clamp top_k to number of indexed documents
-        effective_k = min(top_k, len(self._chunks))
+        # When pre-filtering, over-recall then filter by candidate_ids
+        if candidate_ids is not None:
+            effective_k = min(len(self._chunks), top_k * 3)
+        else:
+            effective_k = min(top_k, len(self._chunks))
         if effective_k == 0:
             return []
 
@@ -112,6 +125,8 @@ class BM25Retriever(Retriever):
             idx = int(idx)
             if idx < 0 or idx >= len(self._chunks):
                 continue
+            if candidate_ids is not None and idx not in candidate_ids:
+                continue
             chunk = self._chunks[idx]
             results.append({
                 "text": chunk.text,
@@ -119,6 +134,8 @@ class BM25Retriever(Retriever):
                 "score": float(score),
                 "retrieval_method": "bm25",
             })
+            if len(results) >= top_k:
+                break
 
         return results
 

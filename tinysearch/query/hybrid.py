@@ -2,7 +2,7 @@
 Hybrid query engine - multi-retriever fusion with optional reranking
 """
 import logging
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from tinysearch.base import QueryEngine, Retriever, FusionStrategy, Reranker
 
@@ -18,13 +18,15 @@ class HybridQueryEngine(QueryEngine):
     with optional reranking.
 
     Pipeline:
-        1. Each retriever recalls top_k * recall_multiplier candidates
-           (× filter_multiplier when metadata filters are active)
-        2. Per-retriever min_score filtering
-        3. Metadata post-filtering (if filters provided)
-        4. FusionStrategy merges and deduplicates results
-        5. Optional Reranker re-scores the fused candidates
-        6. Return top_k final results
+        1. (If filter_mode is "pre" or "auto") Use MetadataIndex to resolve
+           indexable filters into a candidate_ids set; pass to retrievers
+        2. Each retriever recalls top_k * recall_multiplier candidates
+           (× filter_multiplier only when post-filters are active)
+        3. Per-retriever min_score filtering
+        4. Metadata post-filtering for callable/non-indexable filters
+        5. FusionStrategy merges and deduplicates results
+        6. Optional Reranker re-scores the fused candidates
+        7. Return top_k final results
     """
 
     def __init__(
@@ -35,6 +37,8 @@ class HybridQueryEngine(QueryEngine):
         recall_multiplier: int = 2,
         min_scores: Optional[List[float]] = None,
         filter_multiplier: int = 3,
+        metadata_index=None,
+        filter_mode: str = "auto",
     ):
         """
         Args:
@@ -43,7 +47,10 @@ class HybridQueryEngine(QueryEngine):
             reranker: Optional reranker for final re-scoring
             recall_multiplier: Multiply top_k by this for each retriever's recall
             min_scores: Per-retriever minimum score thresholds (length must match retrievers)
-            filter_multiplier: Extra recall multiplier when filters are active
+            filter_multiplier: Extra recall multiplier when post-filters are active
+            metadata_index: Optional MetadataIndex for inverted-index pre-filtering
+            filter_mode: "pre" (always pre-filter), "post" (always post-filter),
+                         or "auto" (pre-filter indexable parts, post-filter callables)
         """
         if not retrievers:
             raise ValueError("At least one retriever is required")
@@ -52,12 +59,16 @@ class HybridQueryEngine(QueryEngine):
                 f"min_scores length ({len(min_scores)}) must match "
                 f"retrievers length ({len(retrievers)})"
             )
+        if filter_mode not in ("pre", "post", "auto"):
+            raise ValueError(f"filter_mode must be 'pre', 'post', or 'auto', got '{filter_mode}'")
         self.retrievers = retrievers
         self.fusion_strategy = fusion_strategy
         self.reranker = reranker
         self.recall_multiplier = recall_multiplier
         self.min_scores = min_scores
         self.filter_multiplier = filter_multiplier
+        self.metadata_index = metadata_index
+        self.filter_mode = filter_mode
 
     def format_query(self, query: str) -> str:
         """Pass-through: hybrid engine doesn't transform queries"""
@@ -100,16 +111,53 @@ class HybridQueryEngine(QueryEngine):
         filters = kwargs.pop("filters", None)
         weights = kwargs.pop("weights", None)
 
-        # Compute recall amount — over-recall when filters are active
+        # Resolve pre-filter vs post-filter strategy
+        candidate_ids = None
+        post_filters = None
+
+        if filters and self.metadata_index is not None:
+            if self.filter_mode == "pre":
+                candidate_ids = self.metadata_index.lookup(filters)
+                if candidate_ids is None:
+                    # Has callable filters, fall back to post-filter
+                    post_filters = filters
+                elif len(candidate_ids) == 0:
+                    return {
+                        "results": [],
+                        "per_retriever": [[] for _ in self.retrievers],
+                        "fused_before_rerank": [],
+                    }
+            elif self.filter_mode == "post":
+                post_filters = filters
+            else:  # auto
+                indexable, callables = self.metadata_index.classify_filters(filters)
+                if indexable:
+                    candidate_ids = self.metadata_index.lookup(indexable)
+                    if candidate_ids is not None and len(candidate_ids) == 0:
+                        return {
+                            "results": [],
+                            "per_retriever": [[] for _ in self.retrievers],
+                            "fused_before_rerank": [],
+                        }
+                if callables:
+                    post_filters = callables
+        elif filters:
+            # No metadata_index available, always post-filter
+            post_filters = filters
+
+        # Compute recall amount — filter_multiplier only when post-filtering
         recall_k = top_k * self.recall_multiplier
-        if filters:
+        if post_filters:
             recall_k *= self.filter_multiplier
 
         # Step 1: Recall from each retriever
         per_retriever: List[List[Dict[str, Any]]] = []
         for i, retriever in enumerate(self.retrievers):
             try:
-                results = retriever.retrieve(query, top_k=recall_k)
+                retriever_kwargs: Dict[str, Any] = {}
+                if candidate_ids is not None:
+                    retriever_kwargs["candidate_ids"] = candidate_ids
+                results = retriever.retrieve(query, top_k=recall_k, **retriever_kwargs)
             except Exception as e:
                 retriever_name = type(retriever).__name__
                 logger.warning(
@@ -124,10 +172,10 @@ class HybridQueryEngine(QueryEngine):
 
             per_retriever.append(results)
 
-        # Step 2: Metadata post-filtering
-        if filters:
+        # Step 2: Post-filtering (only for callable/non-indexable filters)
+        if post_filters:
             per_retriever = [
-                self._apply_filters(results, filters) for results in per_retriever
+                self._apply_filters(results, post_filters) for results in per_retriever
             ]
 
         # Step 3: Fuse results (pass dynamic weights if provided)

@@ -12,6 +12,7 @@ from tinysearch.base import TextChunk, FlowController as FlowControllerBase
 from tinysearch.flow.hot_update import HotUpdateManager
 from tinysearch.query.hybrid import HybridQueryEngine
 from tinysearch.retrievers.vector_retriever import VectorRetriever
+from tinysearch.utils.file_discovery import iter_input_files
 
 
 class FlowController(FlowControllerBase):
@@ -159,24 +160,15 @@ class FlowController(FlowControllerBase):
             force_reprocess: If True, reprocess even if file is in cache
         """
         dir_path = Path(dir_path)
-        
+
         if not dir_path.is_dir():
             raise ValueError(f"{dir_path} is not a directory")
-        
-        # Function to check if a file should be processed
-        def should_process(file_path: Path) -> bool:
-            if extensions and file_path.suffix.lower() not in extensions:
-                return False
+
+        adapter_type = self.config.get("adapter", {}).get("type", "text")
+        for file_path in iter_input_files(dir_path, adapter_type=adapter_type, extensions=extensions, recursive=recursive):
             if not force_reprocess and str(file_path) in self.processed_files:
-                return False
-            return True
-        
-        # Process all matching files in directory
-        for item in dir_path.iterdir():
-            if item.is_file() and should_process(item):
-                self.process_file(item, force_reprocess)
-            elif item.is_dir() and recursive:
-                self.process_directory(item, extensions, recursive, force_reprocess)
+                continue
+            self.process_file(file_path, force_reprocess)
     
     def build_index(self, data_path: Union[str, Path], **kwargs) -> None:
         """
@@ -212,12 +204,16 @@ class FlowController(FlowControllerBase):
         return []
 
     def _build_retriever_indexes(self, chunks: List[TextChunk]) -> None:
-        """Build indexes for non-vector retrievers in HybridQueryEngine"""
+        """Build indexes for non-vector retrievers and metadata index in HybridQueryEngine"""
         for retriever in self._get_hybrid_retrievers():
             # Skip VectorRetriever - it's already handled by self.indexer.build()
             if isinstance(retriever, VectorRetriever):
                 continue
             retriever.build(chunks)
+
+        # Build metadata index for pre-filtering
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.metadata_index is not None:
+            self.query_engine.metadata_index.build(chunks)
 
     def save_index(self, path: Optional[Union[str, Path]] = None) -> None:
         """
@@ -237,7 +233,7 @@ class FlowController(FlowControllerBase):
         self._save_retriever_indexes(Path(str(path)))
 
     def _save_retriever_indexes(self, base_path: Path) -> None:
-        """Save indexes for non-vector retrievers inside the FAISS index directory"""
+        """Save indexes for non-vector retrievers and metadata index inside the FAISS index directory"""
         # FAISS saves into base_path.with_suffix('') (e.g. "index.faiss" → "index/")
         index_dir = base_path.with_suffix('') if base_path.suffix else base_path
         for retriever in self._get_hybrid_retrievers():
@@ -247,6 +243,10 @@ class FlowController(FlowControllerBase):
             retriever_name = type(retriever).__name__.lower().replace("retriever", "")
             retriever_path = index_dir / f"{retriever_name}_index"
             retriever.save(retriever_path)
+
+        # Save metadata index
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.metadata_index is not None:
+            self.query_engine.metadata_index.save(index_dir / "metadata_index.json")
 
     def load_index(self, path: Optional[Union[str, Path]] = None) -> None:
         """
@@ -266,7 +266,7 @@ class FlowController(FlowControllerBase):
         self._load_retriever_indexes(Path(str(path)))
 
     def _load_retriever_indexes(self, base_path: Path) -> None:
-        """Load indexes for non-vector retrievers from the FAISS index directory"""
+        """Load indexes for non-vector retrievers and metadata index from the FAISS index directory"""
         index_dir = base_path.with_suffix('') if base_path.suffix else base_path
         for retriever in self._get_hybrid_retrievers():
             if isinstance(retriever, VectorRetriever):
@@ -275,6 +275,12 @@ class FlowController(FlowControllerBase):
             retriever_path = index_dir / f"{retriever_name}_index"
             if retriever_path.exists():
                 retriever.load(retriever_path)
+
+        # Load metadata index
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.metadata_index is not None:
+            metadata_path = index_dir / "metadata_index.json"
+            if metadata_path.exists():
+                self.query_engine.metadata_index.load(metadata_path)
     
     def query(self, query_text: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """

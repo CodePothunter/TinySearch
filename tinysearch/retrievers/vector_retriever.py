@@ -40,8 +40,18 @@ class VectorRetriever(Retriever):
         vectors = self.embedder.embed(texts)
         self.indexer.build(vectors, chunks)
 
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Embed query and search the vector index"""
+    def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Embed query and search the vector index.
+
+        Args:
+            query: Query string
+            top_k: Number of results to return
+            **kwargs:
+                candidate_ids: Optional Set[int] of chunk indices to restrict search to
+        """
+        candidate_ids = kwargs.get("candidate_ids")
+
         # Apply query template if configured
         formatted_query = query
         if self.query_template:
@@ -56,8 +66,8 @@ class VectorRetriever(Retriever):
             return []
         query_vector = query_vectors[0]
 
-        # Search
-        raw_results = self.indexer.search(query_vector, top_k)
+        # Search (forward candidate_ids to indexer)
+        raw_results = self.indexer.search(query_vector, top_k, candidate_ids=candidate_ids)
 
         # Normalize scores to [0, 1] and add retrieval_method
         results = []

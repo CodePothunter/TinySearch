@@ -6,12 +6,14 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 from tinysearch.base import TextChunk, QueryEngine, Retriever
+from tinysearch.utils.file_discovery import iter_input_files
 from tinysearch.retrievers.bm25_retriever import BM25Retriever
 from tinysearch.retrievers.substring_retriever import SubstringRetriever
 from tinysearch.fusion.weighted import WeightedFusion
 from tinysearch.fusion.rrf import ReciprocalRankFusion
 from tinysearch.fusion._utils import make_doc_key
 from tinysearch.query.hybrid import HybridQueryEngine
+from tinysearch.indexers.metadata_index import MetadataIndex
 
 
 # ── Fixtures ──────────────────────────────────────────────
@@ -360,6 +362,7 @@ class TestRetrieverIndexPath:
         from tinysearch.flow.controller import FlowController
         fc = FlowController.__new__(FlowController)
         fc.query_engine = MagicMock(spec=HybridQueryEngine)
+        fc.query_engine.metadata_index = None
 
         mock_retriever = MagicMock()
         mock_retriever.__class__.__name__ = "BM25Retriever"
@@ -372,6 +375,7 @@ class TestRetrieverIndexPath:
         from tinysearch.flow.controller import FlowController
         fc = FlowController.__new__(FlowController)
         fc.query_engine = MagicMock(spec=HybridQueryEngine)
+        fc.query_engine.metadata_index = None
 
         mock_retriever = MagicMock()
         mock_retriever.__class__.__name__ = "BM25Retriever"
@@ -381,3 +385,228 @@ class TestRetrieverIndexPath:
         with patch.object(Path, "exists", return_value=True):
             fc._load_retriever_indexes(Path("data/index.faiss"))
         mock_retriever.load.assert_called_once_with(Path("data/index") / "bm25_index")
+
+
+# ── iter_input_files ─────────────────────────────────────
+
+class TestIterInputFiles:
+    def test_single_file(self, tmp_path):
+        f = tmp_path / "doc.txt"
+        f.write_text("hello")
+        assert list(iter_input_files(f)) == [f]
+
+    def test_directory_filters_by_adapter_type(self, tmp_path):
+        (tmp_path / "a.txt").write_text("a")
+        (tmp_path / "b.pdf").write_text("b")
+        (tmp_path / "c.py").write_text("c")
+        files = list(iter_input_files(tmp_path, adapter_type="text"))
+        suffixes = {f.suffix for f in files}
+        assert ".txt" in suffixes
+        assert ".py" in suffixes
+        assert ".pdf" not in suffixes
+
+    def test_custom_extensions_override(self, tmp_path):
+        (tmp_path / "a.xyz").write_text("a")
+        (tmp_path / "b.txt").write_text("b")
+        files = list(iter_input_files(tmp_path, extensions=[".xyz"]))
+        assert len(files) == 1
+        assert files[0].suffix == ".xyz"
+
+    def test_nonexistent_path_raises(self):
+        with pytest.raises(FileNotFoundError):
+            list(iter_input_files(Path("/nonexistent")))
+
+    def test_sorted_deterministic(self, tmp_path):
+        for name in ["c.txt", "a.txt", "b.txt"]:
+            (tmp_path / name).write_text(name)
+        files = list(iter_input_files(tmp_path, adapter_type="text"))
+        assert files == sorted(files)
+
+    def test_recursive_finds_nested(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (tmp_path / "top.txt").write_text("top")
+        (sub / "nested.txt").write_text("nested")
+        files = list(iter_input_files(tmp_path, adapter_type="text", recursive=True))
+        assert len(files) == 2
+
+    def test_non_recursive_skips_nested(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (tmp_path / "top.txt").write_text("top")
+        (sub / "nested.txt").write_text("nested")
+        files = list(iter_input_files(tmp_path, adapter_type="text", recursive=False))
+        assert len(files) == 1
+
+
+# ── Adapter directory rejection ──────────────────────────
+
+class TestAdapterRejectsDirectory:
+    def test_text_adapter_rejects_directory(self, tmp_path):
+        from tinysearch.adapters.text import TextAdapter
+        (tmp_path / "a.txt").write_text("hello")
+        with pytest.raises(ValueError, match="does not accept directories"):
+            TextAdapter().extract(tmp_path)
+
+    def test_csv_adapter_rejects_directory(self, tmp_path):
+        from tinysearch.adapters.csv import CSVAdapter
+        (tmp_path / "a.csv").write_text("col\nval")
+        with pytest.raises(ValueError, match="does not accept directories"):
+            CSVAdapter().extract(tmp_path)
+
+    def test_markdown_adapter_rejects_directory(self, tmp_path):
+        from tinysearch.adapters.markdown import MarkdownAdapter
+        (tmp_path / "a.md").write_text("# Hello")
+        with pytest.raises(ValueError, match="does not accept directories"):
+            MarkdownAdapter().extract(tmp_path)
+
+    def test_json_adapter_rejects_directory(self, tmp_path):
+        from tinysearch.adapters.json_adapter import JSONAdapter
+        (tmp_path / "a.json").write_text('{"key": "val"}')
+        with pytest.raises(ValueError, match="does not accept directories"):
+            JSONAdapter().extract(tmp_path)
+
+
+# ── Source metadata consistency ──────────────────────────
+
+class TestSourceMetadataConsistency:
+    def test_cli_and_flowcontroller_same_sources(self, tmp_path):
+        """CLI build_index and FlowController should discover the same files."""
+        (tmp_path / "file1.txt").write_text("Content A")
+        (tmp_path / "file2.txt").write_text("Content B")
+        (tmp_path / "ignore.pdf").write_text("PDF")
+
+        cli_sources = {str(f) for f in iter_input_files(tmp_path, adapter_type="text")}
+        fc_sources = {str(f) for f in iter_input_files(tmp_path, adapter_type="text")}
+
+        assert cli_sources == fc_sources
+        assert len(cli_sources) == 2
+        assert all("ignore.pdf" not in s for s in cli_sources)
+
+
+# ── Pre-filter (MetadataIndex + candidate_ids) ───────────
+
+@pytest.fixture
+def graded_chunks():
+    """Chunks with grade metadata for pre-filter testing."""
+    return [
+        TextChunk("Python编程语言", {"source": "a.txt", "grade": "六年级上", "chunk_index": 0}),
+        TextChunk("Java编程语言", {"source": "b.txt", "grade": "六年级下", "chunk_index": 0}),
+        TextChunk("TinySearch检索系统", {"source": "c.txt", "grade": "七年级", "chunk_index": 0}),
+        TextChunk("向量数据库", {"source": "d.txt", "grade": "六年级上", "chunk_index": 0}),
+    ]
+
+
+@pytest.fixture
+def prefilter_engine(graded_chunks):
+    """HybridQueryEngine with MetadataIndex for pre-filter testing."""
+    bm25 = BM25Retriever()
+    bm25.build(graded_chunks)
+    substr = SubstringRetriever()
+    substr.build(graded_chunks)
+
+    metadata_index = MetadataIndex()
+    metadata_index.build(graded_chunks)
+
+    return HybridQueryEngine(
+        [bm25, substr],
+        WeightedFusion([0.6, 0.4]),
+        metadata_index=metadata_index,
+        filter_mode="auto",
+    )
+
+
+class TestPreFilter:
+    def test_bm25_candidate_ids(self, graded_chunks):
+        """BM25 with candidate_ids only returns results within the set."""
+        bm25 = BM25Retriever()
+        bm25.build(graded_chunks)
+        # Only allow chunks 0 and 3 (grade=六年级上)
+        results = bm25.retrieve("编程", top_k=5, candidate_ids={0, 3})
+        for r in results:
+            assert r["metadata"]["grade"] == "六年级上"
+
+    def test_substring_candidate_ids(self, graded_chunks):
+        """SubstringRetriever with candidate_ids restricts search."""
+        substr = SubstringRetriever()
+        substr.build(graded_chunks)
+        results = substr.retrieve("编程", top_k=5, candidate_ids={0})
+        assert len(results) == 1
+        assert results[0]["metadata"]["source"] == "a.txt"
+
+    def test_candidate_ids_none_is_noop(self, graded_chunks):
+        """Passing candidate_ids=None returns same as no kwargs."""
+        bm25 = BM25Retriever()
+        bm25.build(graded_chunks)
+        r1 = bm25.retrieve("编程", top_k=5)
+        r2 = bm25.retrieve("编程", top_k=5, candidate_ids=None)
+        assert len(r1) == len(r2)
+
+    def test_candidate_ids_empty_returns_empty(self, graded_chunks):
+        """Passing candidate_ids=set() returns []."""
+        bm25 = BM25Retriever()
+        bm25.build(graded_chunks)
+        results = bm25.retrieve("编程", top_k=5, candidate_ids=set())
+        assert results == []
+
+    def test_filter_mode_pre(self, graded_chunks):
+        """Pre-filter mode resolves filters via MetadataIndex."""
+        bm25 = BM25Retriever()
+        bm25.build(graded_chunks)
+        substr = SubstringRetriever()
+        substr.build(graded_chunks)
+
+        metadata_index = MetadataIndex()
+        metadata_index.build(graded_chunks)
+
+        engine = HybridQueryEngine(
+            [bm25, substr],
+            WeightedFusion([0.6, 0.4]),
+            metadata_index=metadata_index,
+            filter_mode="pre",
+        )
+        results = engine.retrieve("编程", top_k=5, filters={"grade": "六年级上"})
+        assert all(r["metadata"]["grade"] == "六年级上" for r in results)
+
+    def test_filter_mode_auto_mixed(self, prefilter_engine):
+        """Auto mode: indexable filters pre-filter, callable filters post-filter."""
+        results = prefilter_engine.retrieve(
+            "编程", top_k=5,
+            filters={
+                "grade": "六年级上",
+                "source": lambda v: v == "a.txt",  # callable → post-filter
+            },
+        )
+        assert all(r["metadata"]["source"] == "a.txt" for r in results)
+
+    def test_no_metadata_index_backward_compat(self, graded_chunks):
+        """When metadata_index=None, filters are purely post-applied."""
+        bm25 = BM25Retriever()
+        bm25.build(graded_chunks)
+        substr = SubstringRetriever()
+        substr.build(graded_chunks)
+
+        engine = HybridQueryEngine(
+            [bm25, substr],
+            WeightedFusion([0.6, 0.4]),
+            metadata_index=None,
+        )
+        results = engine.retrieve("编程", top_k=5, filters={"grade": "六年级上"})
+        assert all(r["metadata"]["grade"] == "六年级上" for r in results)
+
+    def test_empty_candidate_short_circuits(self, graded_chunks):
+        """When lookup returns empty set, pipeline returns [] immediately."""
+        bm25 = BM25Retriever()
+        bm25.build(graded_chunks)
+
+        metadata_index = MetadataIndex()
+        metadata_index.build(graded_chunks)
+
+        engine = HybridQueryEngine(
+            [bm25],
+            WeightedFusion(),
+            metadata_index=metadata_index,
+            filter_mode="pre",
+        )
+        results = engine.retrieve("编程", top_k=5, filters={"grade": "不存在"})
+        assert results == []

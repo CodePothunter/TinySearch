@@ -15,6 +15,7 @@ from .base import (
     Retriever, FusionStrategy, Reranker,
 )
 from .adapters import TextAdapter, PDFAdapter, CSVAdapter, MarkdownAdapter, JSONAdapter
+from tinysearch.utils.file_discovery import iter_input_files
 from .splitters import CharacterTextSplitter
 from .embedders import HuggingFaceEmbedder
 # 直接从模块导入
@@ -265,9 +266,12 @@ def load_query_engine(config: Config, embedder: Embedder, indexer: FAISSIndexer)
             template=config.get("query_engine.template", "请帮我查找：{query}")
         )
     elif query_engine_type == "hybrid":
+        from tinysearch.indexers.metadata_index import MetadataIndex
         retrievers = load_retrievers(config, embedder, indexer)
         fusion = load_fusion(config)
         reranker = load_reranker(config)
+        filter_mode = config.get("query_engine.filter_mode", "auto")
+        metadata_index = MetadataIndex() if filter_mode != "post" else None
         return HybridQueryEngine(
             retrievers=retrievers,
             fusion_strategy=fusion,
@@ -275,6 +279,8 @@ def load_query_engine(config: Config, embedder: Embedder, indexer: FAISSIndexer)
             recall_multiplier=config.get("query_engine.recall_multiplier", 2),
             min_scores=config.get("query_engine.min_scores", None),
             filter_multiplier=config.get("query_engine.filter_multiplier", 3),
+            metadata_index=metadata_index,
+            filter_mode=filter_mode,
         )
     else:
         raise ValueError(f"Unsupported query engine type: {query_engine_type}")
@@ -293,7 +299,7 @@ def _get_retriever_index_dir(index_path: Path) -> Path:
 def _build_hybrid_retriever_indexes(
     query_engine: QueryEngine, chunks, logger=None,
 ) -> None:
-    """Build BM25 / Substring indexes when the engine is a HybridQueryEngine."""
+    """Build BM25 / Substring / MetadataIndex when the engine is a HybridQueryEngine."""
     if not isinstance(query_engine, HybridQueryEngine):
         return
     for retriever in query_engine.retrievers:
@@ -304,11 +310,17 @@ def _build_hybrid_retriever_indexes(
             log_step(f"Building {rname} index")
         retriever.build(chunks)
 
+    # Build metadata index for pre-filtering
+    if query_engine.metadata_index is not None:
+        if logger:
+            log_step("Building MetadataIndex")
+        query_engine.metadata_index.build(chunks)
+
 
 def _save_hybrid_retriever_indexes(
     query_engine: QueryEngine, index_path: Path, logger=None,
 ) -> None:
-    """Save non-vector retriever indexes alongside the FAISS index."""
+    """Save non-vector retriever indexes and metadata index alongside the FAISS index."""
     if not isinstance(query_engine, HybridQueryEngine):
         return
     index_dir = _get_retriever_index_dir(index_path)
@@ -321,11 +333,18 @@ def _save_hybrid_retriever_indexes(
             log_step(f"Saving {type(retriever).__name__} index to {rpath}")
         retriever.save(rpath)
 
+    # Save metadata index
+    if query_engine.metadata_index is not None:
+        mpath = index_dir / "metadata_index.json"
+        if logger:
+            log_step(f"Saving MetadataIndex to {mpath}")
+        query_engine.metadata_index.save(mpath)
+
 
 def _load_hybrid_retriever_indexes(
     query_engine: QueryEngine, index_path: Path, logger=None,
 ) -> None:
-    """Load non-vector retriever indexes from alongside the FAISS index."""
+    """Load non-vector retriever indexes and metadata index from alongside the FAISS index."""
     if not isinstance(query_engine, HybridQueryEngine):
         return
     index_dir = _get_retriever_index_dir(index_path)
@@ -338,6 +357,14 @@ def _load_hybrid_retriever_indexes(
             if logger:
                 log_step(f"Loading {type(retriever).__name__} index from {rpath}")
             retriever.load(rpath)
+
+    # Load metadata index
+    if query_engine.metadata_index is not None:
+        mpath = index_dir / "metadata_index.json"
+        if mpath.exists():
+            if logger:
+                log_step(f"Loading MetadataIndex from {mpath}")
+            query_engine.metadata_index.load(mpath)
 
 
 def build_index(args: argparse.Namespace, config: Config) -> None:
@@ -367,20 +394,15 @@ def build_index(args: argparse.Namespace, config: Config) -> None:
     data_path = Path(args.data)
     texts: list = []
     metadata: list = []
-    if data_path.is_dir():
-        for child in sorted(data_path.rglob("*")):
-            if not child.is_file():
-                continue
-            try:
-                file_texts = adapter.extract(child)
-            except Exception:
-                continue  # adapter will skip unsupported extensions
-            for t in file_texts:
-                texts.append(t)
-                metadata.append({"source": str(child)})
-    else:
-        texts = adapter.extract(args.data)
-        metadata = [{"source": str(data_path)} for _ in range(len(texts))]
+    adapter_type = config.get("adapter.type", "text")
+    for file_path in iter_input_files(data_path, adapter_type=adapter_type):
+        try:
+            file_texts = adapter.extract(file_path)
+        except Exception:
+            continue
+        for t in file_texts:
+            texts.append(t)
+            metadata.append({"source": str(file_path)})
     logger.info(f"📄 Extracted {len(texts)} documents")
 
     # Split text into chunks

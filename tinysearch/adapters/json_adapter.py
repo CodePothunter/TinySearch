@@ -54,20 +54,13 @@ class JSONAdapter(DataAdapter):
             raise FileNotFoundError(f"File not found: {filepath}")
         
         if filepath.is_dir():
-            # If a directory is provided, process all JSON files in it
-            json_files = list(filepath.glob("**/*.json"))
-            
-            result = []
-            for file in json_files:
-                try:
-                    result.extend(self._extract_from_json(file))
-                except Exception as e:
-                    print(f"Error reading {file}: {e}")
-            
-            return result
-        else:
-            # Process a single file
-            return self._extract_from_json(filepath)
+            raise ValueError(
+                f"JSONAdapter.extract() does not accept directories. "
+                "Use iter_input_files() to iterate files, then call extract() on each."
+            )
+
+        # Process a single file
+        return self._extract_from_json(filepath)
     
     def _extract_from_json(self, filepath: Path) -> List[str]:
         """
