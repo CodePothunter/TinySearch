@@ -26,6 +26,32 @@ class DataAdapter(ABC):
         pass
 
 
+class RecordAdapter(ABC):
+    """
+    Interface for adapters that convert structured records (dicts) to TextChunks.
+    Unlike DataAdapter (file-oriented), RecordAdapter works with in-memory data
+    from APIs, databases, or other programmatic sources.
+    """
+
+    @abstractmethod
+    def to_chunk(self, record_id: str, record: Dict[str, Any]) -> "TextChunk":
+        """
+        Convert one record to a TextChunk with text and metadata.
+
+        The implementation should:
+        - Extract/compose the searchable text from the record fields
+        - Build metadata dict including at minimum {"record_id": record_id}
+
+        Args:
+            record_id: Unique identifier for the record
+            record: Record data as a dictionary
+
+        Returns:
+            TextChunk with text and metadata derived from the record
+        """
+        pass
+
+
 class TextChunk:
     """
     Represents a chunk of text with optional metadata

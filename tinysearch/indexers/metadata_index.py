@@ -65,6 +65,33 @@ class MetadataIndex:
             field_stats,
         )
 
+    def add_chunks(self, chunks: List[TextChunk], start_id: int) -> None:
+        """
+        Incrementally add new chunks to the inverted index.
+
+        Args:
+            chunks: New TextChunks to index
+            start_id: First chunk ID to assign (typically current total_chunks)
+        """
+        for offset, chunk in enumerate(chunks):
+            chunk_id = start_id + offset
+            if not chunk.metadata:
+                continue
+            for key, value in chunk.metadata.items():
+                if isinstance(value, _INDEXABLE_TYPES):
+                    self._index[key][value].add(chunk_id)
+                elif isinstance(value, list):
+                    for element in value:
+                        if isinstance(element, _INDEXABLE_TYPES):
+                            self._index[key][element].add(chunk_id)
+
+        self._total_chunks += len(chunks)
+        logger.info(
+            "MetadataIndex: added %d chunks (total now %d)",
+            len(chunks),
+            self._total_chunks,
+        )
+
     def lookup(self, filters: Dict[str, FilterValue]) -> Optional[Set[int]]:
         """
         Resolve filters to a candidate ID set via inverted index.

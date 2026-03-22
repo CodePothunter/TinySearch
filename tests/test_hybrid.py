@@ -363,6 +363,7 @@ class TestRetrieverIndexPath:
         fc = FlowController.__new__(FlowController)
         fc.query_engine = MagicMock(spec=HybridQueryEngine)
         fc.query_engine.metadata_index = None
+        fc.query_engine.soft_deleted_ids = set()
 
         mock_retriever = MagicMock()
         mock_retriever.__class__.__name__ = "BM25Retriever"
@@ -371,20 +372,25 @@ class TestRetrieverIndexPath:
         fc._save_retriever_indexes(Path("data/index.faiss"))
         mock_retriever.save.assert_called_once_with(Path("data/index") / "bm25_index")
 
-    def test_flow_controller_load_uses_faiss_dir(self):
+    def test_flow_controller_load_uses_faiss_dir(self, tmp_path):
         from tinysearch.flow.controller import FlowController
         fc = FlowController.__new__(FlowController)
         fc.query_engine = MagicMock(spec=HybridQueryEngine)
         fc.query_engine.metadata_index = None
+        fc.query_engine.soft_deleted_ids = set()
 
         mock_retriever = MagicMock()
         mock_retriever.__class__.__name__ = "BM25Retriever"
         fc.query_engine.retrievers = [mock_retriever]
 
-        # Simulate that the path exists
-        with patch.object(Path, "exists", return_value=True):
-            fc._load_retriever_indexes(Path("data/index.faiss"))
-        mock_retriever.load.assert_called_once_with(Path("data/index") / "bm25_index")
+        # Create a real directory structure for the test
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        bm25_dir = index_dir / "bm25_index"
+        bm25_dir.mkdir()
+
+        fc._load_retriever_indexes(tmp_path / "index.faiss")
+        mock_retriever.load.assert_called_once_with(index_dir / "bm25_index")
 
 
 # ── iter_input_files ─────────────────────────────────────

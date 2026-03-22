@@ -39,6 +39,7 @@ class HybridQueryEngine(QueryEngine):
         filter_multiplier: int = 3,
         metadata_index=None,
         filter_mode: str = "auto",
+        soft_deleted_ids: Optional[set] = None,
     ):
         """
         Args:
@@ -51,6 +52,7 @@ class HybridQueryEngine(QueryEngine):
             metadata_index: Optional MetadataIndex for inverted-index pre-filtering
             filter_mode: "pre" (always pre-filter), "post" (always post-filter),
                          or "auto" (pre-filter indexable parts, post-filter callables)
+            soft_deleted_ids: Optional set of record_ids to exclude from results
         """
         if not retrievers:
             raise ValueError("At least one retriever is required")
@@ -69,6 +71,19 @@ class HybridQueryEngine(QueryEngine):
         self.filter_multiplier = filter_multiplier
         self.metadata_index = metadata_index
         self.filter_mode = filter_mode
+        self.soft_deleted_ids: set = soft_deleted_ids or set()
+
+    def add_soft_deletes(self, record_ids: set) -> None:
+        """Mark record_ids as soft-deleted (excluded from results)."""
+        self.soft_deleted_ids |= record_ids
+
+    def clear_soft_deletes(self) -> None:
+        """Clear all soft deletes (typically after a full rebuild)."""
+        self.soft_deleted_ids.clear()
+
+    @property
+    def soft_delete_count(self) -> int:
+        return len(self.soft_deleted_ids)
 
     def format_query(self, query: str) -> str:
         """Pass-through: hybrid engine doesn't transform queries"""
@@ -183,6 +198,13 @@ class HybridQueryEngine(QueryEngine):
         if weights is not None:
             fuse_kwargs["weights"] = weights
         fused = self.fusion_strategy.fuse(per_retriever, **fuse_kwargs)
+
+        # Step 3.5: Remove soft-deleted results
+        if self.soft_deleted_ids:
+            fused = [
+                r for r in fused
+                if r.get("metadata", {}).get("record_id") not in self.soft_deleted_ids
+            ]
 
         fused_before_rerank = list(fused)
 
