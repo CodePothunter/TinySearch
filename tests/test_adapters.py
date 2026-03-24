@@ -38,34 +38,35 @@ def test_text_adapter_file():
 
 
 def test_text_adapter_directory():
-    """Test TextAdapter with a directory"""
-    # Create a temporary directory with multiple files
+    """Test TextAdapter rejects directories — use iter_input_files() for directory scanning"""
+    from tinysearch.utils.file_discovery import iter_input_files
+
     with tempfile.TemporaryDirectory() as temp_dir:
         # Create test files
         file1 = Path(temp_dir) / "file1.txt"
         file2 = Path(temp_dir) / "file2.txt"
         file3 = Path(temp_dir) / "subdir" / "file3.txt"
-        
-        # Create subdirectory
+
         os.makedirs(os.path.dirname(file3), exist_ok=True)
-        
-        # Write content to files
+
         with open(file1, "w") as f:
             f.write("Content of file 1")
-        
         with open(file2, "w") as f:
             f.write("Content of file 2")
-        
         with open(file3, "w") as f:
             f.write("Content of file 3")
-        
-        # Create an adapter
+
         adapter = TextAdapter()
-        
-        # Extract text
-        texts = adapter.extract(temp_dir)
-        
-        # Check results
+
+        # extract() should reject directories
+        with pytest.raises(ValueError, match="does not accept directories"):
+            adapter.extract(temp_dir)
+
+        # Correct workflow: iter_input_files() + per-file extract()
+        texts = []
+        for fp in iter_input_files(temp_dir):
+            texts.extend(adapter.extract(fp))
+
         assert len(texts) == 3
         assert "Content of file 1" in texts
         assert "Content of file 2" in texts
@@ -188,37 +189,29 @@ def test_text_adapter_large_file_handling():
 
 
 def test_text_adapter_directory_empty():
-    """Test TextAdapter with an empty directory"""
-    # Create a temporary empty directory
+    """Test TextAdapter rejects empty directories"""
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Directory with no files should return empty list
         adapter = TextAdapter()
-        texts = adapter.extract(temp_dir)
-        
-        assert len(texts) == 0
+
+        with pytest.raises(ValueError, match="does not accept directories"):
+            adapter.extract(temp_dir)
 
 
 def test_text_adapter_directory_non_text_files():
-    """Test TextAdapter with non-text files in directory"""
-    # Create a temporary directory with a binary file
+    """Test TextAdapter rejects directories — binary files are irrelevant at adapter level"""
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a binary file
         bin_file = Path(temp_dir) / "binary.bin"
         with open(bin_file, "wb") as f:
             f.write(b'\x00\x01\x02\x03\x04')
-        
-        # Create a text file
+
         txt_file = Path(temp_dir) / "text.txt"
         with open(txt_file, "w") as f:
             f.write("This is a text file")
-        
-        # Extract - binary file should be skipped by default (errors='ignore')
+
         adapter = TextAdapter()
-        texts = adapter.extract(temp_dir)
-        
-        # Should only get text from the text file
-        assert len(texts) == 1
-        assert texts[0] == "This is a text file"
+
+        with pytest.raises(ValueError, match="does not accept directories"):
+            adapter.extract(temp_dir)
 
 
 def test_adapter_interface():
