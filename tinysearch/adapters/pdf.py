@@ -56,20 +56,13 @@ class PDFAdapter(DataAdapter):
             raise FileNotFoundError(f"File not found: {filepath}")
         
         if filepath.is_dir():
-            # If a directory is provided, process all PDF files in it
-            pdf_files = list(filepath.glob("**/*.pdf"))
-            
-            result = []
-            for file in pdf_files:
-                try:
-                    result.extend(self._extract_from_pdf(file))
-                except Exception as e:
-                    print(f"Error reading {file}: {e}")
-            
-            return result
-        else:
-            # Process a single file
-            return self._extract_from_pdf(filepath)
+            raise ValueError(
+                f"PDFAdapter.extract() does not accept directories. "
+                "Use iter_input_files() to iterate files, then call extract() on each."
+            )
+
+        # Process a single file
+        return self._extract_from_pdf(filepath)
     
     def _extract_from_pdf(self, filepath: Path) -> List[str]:
         """

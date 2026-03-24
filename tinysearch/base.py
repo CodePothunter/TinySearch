@@ -26,6 +26,32 @@ class DataAdapter(ABC):
         pass
 
 
+class RecordAdapter(ABC):
+    """
+    Interface for adapters that convert structured records (dicts) to TextChunks.
+    Unlike DataAdapter (file-oriented), RecordAdapter works with in-memory data
+    from APIs, databases, or other programmatic sources.
+    """
+
+    @abstractmethod
+    def to_chunk(self, record_id: str, record: Dict[str, Any]) -> "TextChunk":
+        """
+        Convert one record to a TextChunk with text and metadata.
+
+        The implementation should:
+        - Extract/compose the searchable text from the record fields
+        - Build metadata dict including at minimum {"record_id": record_id}
+
+        Args:
+            record_id: Unique identifier for the record
+            record: Record data as a dictionary
+
+        Returns:
+            TextChunk with text and metadata derived from the record
+        """
+        pass
+
+
 class TextChunk:
     """
     Represents a chunk of text with optional metadata
@@ -152,16 +178,101 @@ class QueryEngine(ABC):
         pass
     
     @abstractmethod
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """
         Retrieve relevant chunks for a query
-        
+
         Args:
             query: Query string
             top_k: Number of results to return
-            
+            **kwargs: Engine-specific parameters (e.g. filters, weights)
+
         Returns:
             List of dictionaries containing text chunks and similarity scores
+        """
+        pass
+
+
+class Retriever(ABC):
+    """
+    Interface for text-level retrievers that search by query string.
+    Unlike VectorIndexer (which takes pre-embedded vectors), Retriever
+    operates on raw text queries, making it suitable for BM25, substring,
+    and wrapped vector search.
+    """
+
+    @abstractmethod
+    def build(self, chunks: List[TextChunk]) -> None:
+        """
+        Build the retriever index from text chunks
+
+        Args:
+            chunks: List of TextChunk objects to index
+        """
+        pass
+
+    @abstractmethod
+    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Retrieve relevant chunks for a text query
+
+        Args:
+            query: Raw query string
+            top_k: Number of results to return
+
+        Returns:
+            List of dicts with keys: text, metadata, score, retrieval_method
+        """
+        pass
+
+    @abstractmethod
+    def save(self, path: Union[str, pathlib.Path]) -> None:
+        """Save the retriever index to disk"""
+        pass
+
+    @abstractmethod
+    def load(self, path: Union[str, pathlib.Path]) -> None:
+        """Load the retriever index from disk"""
+        pass
+
+
+class FusionStrategy(ABC):
+    """
+    Interface for fusing results from multiple retrievers into a single ranked list.
+    """
+
+    @abstractmethod
+    def fuse(self, results_list: List[List[Dict[str, Any]]], **kwargs) -> List[Dict[str, Any]]:
+        """
+        Fuse multiple result lists into a single ranked list
+
+        Args:
+            results_list: List of result lists from different retrievers
+            **kwargs: Strategy-specific parameters
+
+        Returns:
+            Fused and ranked list of results
+        """
+        pass
+
+
+class Reranker(ABC):
+    """
+    Interface for rerankers that re-score candidates using a cross-encoder or similar model.
+    """
+
+    @abstractmethod
+    def rerank(self, query: str, candidates: List[Dict[str, Any]], top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Re-rank candidates for a query
+
+        Args:
+            query: Query string
+            candidates: List of candidate results to re-rank
+            top_k: Number of results to return
+
+        Returns:
+            Re-ranked list of results
         """
         pass
 

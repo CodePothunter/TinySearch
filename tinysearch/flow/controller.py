@@ -7,9 +7,12 @@ import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Set, Tuple, cast, Callable
 
-from tinysearch.base import DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine
+from tinysearch.base import DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine, Retriever
 from tinysearch.base import TextChunk, FlowController as FlowControllerBase
 from tinysearch.flow.hot_update import HotUpdateManager
+from tinysearch.query.hybrid import HybridQueryEngine
+from tinysearch.retrievers.vector_retriever import VectorRetriever
+from tinysearch.utils.file_discovery import iter_input_files
 
 
 class FlowController(FlowControllerBase):
@@ -18,9 +21,12 @@ class FlowController(FlowControllerBase):
     Manages the entire data processing from ingestion to query handling.
     """
     
+    # Soft-delete threshold: trigger full rebuild when exceeded
+    DELETE_REBUILD_THRESHOLD = 100
+
     def __init__(
         self,
-        data_adapter: DataAdapter,
+        data_adapter: Optional[DataAdapter],
         text_splitter: TextSplitter,
         embedder: Embedder,
         indexer: VectorIndexer,
@@ -29,9 +35,9 @@ class FlowController(FlowControllerBase):
     ):
         """
         Initialize the flow controller with all required components
-        
+
         Args:
-            data_adapter: Component for data extraction
+            data_adapter: Component for data extraction (None when using record-based API)
             text_splitter: Component for text chunking
             embedder: Component for generating embeddings
             indexer: Component for vector indexing and search
@@ -141,6 +147,9 @@ class FlowController(FlowControllerBase):
         
         # Add to index
         self.indexer.build(vectors, chunks)
+
+        # Build retriever indexes for HybridQueryEngine
+        self._build_retriever_indexes(chunks)
     
     def process_directory(self, dir_path: Union[str, Path], extensions: Optional[List[str]] = None, 
                          recursive: bool = True, force_reprocess: bool = False) -> None:
@@ -154,24 +163,15 @@ class FlowController(FlowControllerBase):
             force_reprocess: If True, reprocess even if file is in cache
         """
         dir_path = Path(dir_path)
-        
+
         if not dir_path.is_dir():
             raise ValueError(f"{dir_path} is not a directory")
-        
-        # Function to check if a file should be processed
-        def should_process(file_path: Path) -> bool:
-            if extensions and file_path.suffix.lower() not in extensions:
-                return False
+
+        adapter_type = self.config.get("adapter", {}).get("type", "text")
+        for file_path in iter_input_files(dir_path, adapter_type=adapter_type, extensions=extensions, recursive=recursive):
             if not force_reprocess and str(file_path) in self.processed_files:
-                return False
-            return True
-        
-        # Process all matching files in directory
-        for item in dir_path.iterdir():
-            if item.is_file() and should_process(item):
-                self.process_file(item, force_reprocess)
-            elif item.is_dir() and recursive:
-                self.process_directory(item, extensions, recursive, force_reprocess)
+                continue
+            self.process_file(file_path, force_reprocess)
     
     def build_index(self, data_path: Union[str, Path], **kwargs) -> None:
         """
@@ -200,32 +200,242 @@ class FlowController(FlowControllerBase):
         else:
             self.process_file(data_path, force_reprocess=force_reprocess)
     
+    def build_from_records(
+        self,
+        records: Dict[str, Dict[str, Any]],
+        adapter: Any,
+        splitter: Optional[TextSplitter] = None,
+    ) -> List[TextChunk]:
+        """
+        Build the search index from in-memory records.
+
+        Args:
+            records: Mapping of record_id -> record_data
+            adapter: RecordAdapter to convert records to TextChunks
+            splitter: Optional TextSplitter for further chunking
+
+        Returns:
+            List of TextChunks that were indexed
+        """
+        from tinysearch.records import build_chunks_from_records
+
+        chunks = build_chunks_from_records(records, adapter, splitter)
+        if not chunks:
+            return chunks
+
+        vectors = self.embedder.embed([c.text for c in chunks])
+        self.indexer.build(vectors, chunks)
+        self._build_retriever_indexes(chunks)
+
+        return chunks
+
+    def build_incremental(
+        self,
+        records: Dict[str, Dict[str, Any]],
+        adapter: Any,
+        hash_tracker: Any,
+        splitter: Optional[TextSplitter] = None,
+        delete_rebuild_threshold: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Incrementally update the search index based on record changes.
+
+        Pipeline:
+        1. adapter.to_chunk() for each record
+        2. hash_tracker.detect_changes() → new/modified/deleted
+        3. If soft deletes exceed threshold → full rebuild
+        4. Else → FAISS.add() + MetadataIndex.add_chunks() for new/modified
+        5. BM25/Substring always full rebuild (fast)
+
+        Args:
+            records: Current complete set of records {record_id: record_data}
+            adapter: RecordAdapter to convert records to TextChunks
+            hash_tracker: ContentHashTracker for change detection
+            splitter: Optional TextSplitter
+            delete_rebuild_threshold: Max soft deletes before full rebuild
+
+        Returns:
+            Dict with stats: {new, modified, deleted, unchanged, full_rebuild}
+        """
+        from tinysearch.records import build_chunks_from_records
+
+        threshold = delete_rebuild_threshold or self.DELETE_REBUILD_THRESHOLD
+
+        # Step 1: Convert all current records to chunks for change detection
+        current_record_chunks: Dict[str, TextChunk] = {}
+        for rid, rdata in records.items():
+            chunk = adapter.to_chunk(rid, rdata)
+            if "record_id" not in chunk.metadata:
+                chunk.metadata["record_id"] = rid
+            current_record_chunks[rid] = chunk
+
+        # Step 2: Detect changes
+        changes = hash_tracker.detect_changes(current_record_chunks)
+
+        stats = {
+            "new": len(changes.new),
+            "modified": len(changes.modified),
+            "deleted": len(changes.deleted),
+            "unchanged": len(changes.unchanged),
+            "full_rebuild": False,
+        }
+
+        if not changes.has_changes:
+            return stats
+
+        # Step 3: Check if full rebuild needed
+        total_soft_deletes = len(changes.deleted) + len(changes.modified)
+        if isinstance(self.query_engine, HybridQueryEngine):
+            total_soft_deletes += self.query_engine.soft_delete_count
+
+        if total_soft_deletes >= threshold:
+            # Full rebuild path
+            stats["full_rebuild"] = True
+            self.build_from_records(records, adapter, splitter)
+
+            if isinstance(self.query_engine, HybridQueryEngine):
+                self.query_engine.clear_soft_deletes()
+
+            hash_tracker.remove(changes.deleted)
+            hash_tracker.update(current_record_chunks)
+            return stats
+
+        # Step 4: Incremental path
+
+        # 4a: Soft-delete modified + deleted
+        if isinstance(self.query_engine, HybridQueryEngine):
+            ids_to_soft_delete = changes.deleted | set(changes.modified)
+            if ids_to_soft_delete:
+                self.query_engine.add_soft_deletes(ids_to_soft_delete)
+
+        # 4b: Embed and add new + modified to FAISS
+        records_to_add = {rid: records[rid] for rid in changes.new + changes.modified}
+        if records_to_add:
+            new_chunks = build_chunks_from_records(records_to_add, adapter, splitter)
+            if new_chunks:
+                vectors = self.embedder.embed([c.text for c in new_chunks])
+                self.indexer.add(vectors, new_chunks)
+
+                # Incrementally add to MetadataIndex
+                if (isinstance(self.query_engine, HybridQueryEngine)
+                        and self.query_engine.metadata_index is not None):
+                    start_id = self.query_engine.metadata_index.total_chunks
+                    self.query_engine.metadata_index.add_chunks(new_chunks, start_id)
+
+        # 4c: BM25/Substring always full rebuild (fast)
+        all_current_chunks = build_chunks_from_records(records, adapter, splitter)
+        if isinstance(self.query_engine, HybridQueryEngine):
+            for retriever in self.query_engine.retrievers:
+                if isinstance(retriever, VectorRetriever):
+                    continue
+                retriever.build(all_current_chunks)
+
+        # Step 5: Update hash tracker
+        hash_tracker.remove(changes.deleted)
+        hash_tracker.update({
+            rid: current_record_chunks[rid]
+            for rid in changes.new + changes.modified
+        })
+
+        return stats
+
+    def _get_hybrid_retrievers(self) -> List[Retriever]:
+        """Get retrievers from HybridQueryEngine, if applicable"""
+        if isinstance(self.query_engine, HybridQueryEngine):
+            return self.query_engine.retrievers
+        return []
+
+    def _build_retriever_indexes(self, chunks: List[TextChunk]) -> None:
+        """Build indexes for non-vector retrievers and metadata index in HybridQueryEngine"""
+        for retriever in self._get_hybrid_retrievers():
+            # Skip VectorRetriever - it's already handled by self.indexer.build()
+            if isinstance(retriever, VectorRetriever):
+                continue
+            retriever.build(chunks)
+
+        # Build metadata index for pre-filtering
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.metadata_index is not None:
+            self.query_engine.metadata_index.build(chunks)
+
     def save_index(self, path: Optional[Union[str, Path]] = None) -> None:
         """
-        Save the built index to disk
-        
+        Save the built index to disk.
+        Also saves retriever indexes for HybridQueryEngine.
+
         Args:
             path: Path to save the index to, if None use the config path
         """
         if path is None:
             path = self.config.get("indexer", {}).get("index_path", "index.faiss")
-        
-        # Use cast to ensure type safety for optional path
+
+        # Save the main vector index
         self.indexer.save(cast(Union[str, Path], path))
-    
+
+        # Save non-vector retriever indexes
+        self._save_retriever_indexes(Path(str(path)))
+
+    def _save_retriever_indexes(self, base_path: Path) -> None:
+        """Save indexes for non-vector retrievers and metadata index inside the FAISS index directory"""
+        # FAISS saves into base_path.with_suffix('') (e.g. "index.faiss" → "index/")
+        index_dir = base_path.with_suffix('') if base_path.suffix else base_path
+        for retriever in self._get_hybrid_retrievers():
+            if isinstance(retriever, VectorRetriever):
+                continue
+            # Derive subdirectory name from retriever class
+            retriever_name = type(retriever).__name__.lower().replace("retriever", "")
+            retriever_path = index_dir / f"{retriever_name}_index"
+            retriever.save(retriever_path)
+
+        # Save metadata index
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.metadata_index is not None:
+            self.query_engine.metadata_index.save(index_dir / "metadata_index.json")
+
+        # Save soft-delete set
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.soft_deleted_ids:
+            with open(index_dir / "soft_deletes.json", "w") as f:
+                json.dump(sorted(self.query_engine.soft_deleted_ids), f)
+
     def load_index(self, path: Optional[Union[str, Path]] = None) -> None:
         """
-        Load an index from disk
-        
+        Load an index from disk.
+        Also loads retriever indexes for HybridQueryEngine.
+
         Args:
             path: Path to load the index from, if None use the config path
         """
         if path is None:
             path = self.config.get("indexer", {}).get("index_path", "index.faiss")
-        
-        # Use cast to ensure type safety for optional path
+
+        # Load the main vector index
         self.indexer.load(cast(Union[str, Path], path))
-    
+
+        # Load non-vector retriever indexes
+        self._load_retriever_indexes(Path(str(path)))
+
+    def _load_retriever_indexes(self, base_path: Path) -> None:
+        """Load indexes for non-vector retrievers and metadata index from the FAISS index directory"""
+        index_dir = base_path.with_suffix('') if base_path.suffix else base_path
+        for retriever in self._get_hybrid_retrievers():
+            if isinstance(retriever, VectorRetriever):
+                continue
+            retriever_name = type(retriever).__name__.lower().replace("retriever", "")
+            retriever_path = index_dir / f"{retriever_name}_index"
+            if retriever_path.exists():
+                retriever.load(retriever_path)
+
+        # Load metadata index
+        if isinstance(self.query_engine, HybridQueryEngine) and self.query_engine.metadata_index is not None:
+            metadata_path = index_dir / "metadata_index.json"
+            if metadata_path.exists():
+                self.query_engine.metadata_index.load(metadata_path)
+
+        # Load soft-delete set
+        if isinstance(self.query_engine, HybridQueryEngine):
+            soft_delete_path = index_dir / "soft_deletes.json"
+            if soft_delete_path.exists():
+                with open(soft_delete_path, "r") as f:
+                    self.query_engine.soft_deleted_ids = set(json.load(f))
+
     def query(self, query_text: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         """
         Process a query and return relevant chunks
@@ -242,7 +452,7 @@ class FlowController(FlowControllerBase):
             top_k = self.config.get("query_engine", {}).get("top_k", 5)
             
         # Use cast to ensure type safety for optional top_k
-        return self.query_engine.retrieve(query_text, cast(int, top_k))
+        return self.query_engine.retrieve(query_text, cast(int, top_k), **kwargs)
     
     def clear_cache(self) -> None:
         """Clear all cached data"""

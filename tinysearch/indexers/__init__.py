@@ -6,9 +6,14 @@ from typing import Union
 
 # Make the FAISS indexer available from the root module
 from .faiss_indexer import FAISSIndexer
+from .metadata_index import MetadataIndex
+from .hash_tracker import ContentHashTracker, ChangeSet
 
 __all__ = [
-    "FAISSIndexer"
+    "FAISSIndexer",
+    "MetadataIndex",
+    "ContentHashTracker",
+    "ChangeSet",
 ] 
 
 def index_exists(path: Union[str, Path]) -> bool:

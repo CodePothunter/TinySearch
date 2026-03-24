@@ -10,13 +10,24 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Union, Type, cast
 
 from .config import Config
-from .base import DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine
+from .base import (
+    DataAdapter, TextSplitter, Embedder, VectorIndexer, QueryEngine,
+    Retriever, FusionStrategy, Reranker,
+)
 from .adapters import TextAdapter, PDFAdapter, CSVAdapter, MarkdownAdapter, JSONAdapter
+from tinysearch.utils.file_discovery import iter_input_files
 from .splitters import CharacterTextSplitter
 from .embedders import HuggingFaceEmbedder
 # 直接从模块导入
 from .indexers.faiss_indexer import FAISSIndexer
 from .query.template import TemplateQueryEngine
+from .query.hybrid import HybridQueryEngine
+from .retrievers.vector_retriever import VectorRetriever
+from .retrievers.bm25_retriever import BM25Retriever
+from .retrievers.substring_retriever import SubstringRetriever
+from .fusion.rrf import ReciprocalRankFusion
+from .fusion.weighted import WeightedFusion
+from .rerankers.cross_encoder import CrossEncoderReranker
 from .logger import get_logger, configure_logger, log_step, log_progress, log_success, log_error
 
 
@@ -137,28 +148,223 @@ def load_indexer(config: Config) -> FAISSIndexer:
         raise ValueError(f"Unsupported indexer type: {indexer_type}")
 
 
+def load_retriever(config: Config, retriever_config: Dict[str, Any], embedder: Embedder, indexer: FAISSIndexer) -> Retriever:
+    """
+    Load a single retriever based on its config dict.
+
+    Args:
+        config: Global configuration object
+        retriever_config: Dict like {"type": "vector"} or {"type": "bm25", "tokenizer": "jieba"}
+        embedder: Embedder instance (used by vector retriever)
+        indexer: FAISSIndexer instance (used by vector retriever)
+
+    Returns:
+        Retriever instance
+    """
+    rtype = retriever_config.get("type", "vector")
+
+    if rtype == "vector":
+        return VectorRetriever(
+            embedder=embedder,
+            indexer=indexer,
+            query_template=config.get("query_engine.template"),
+        )
+    elif rtype == "bm25":
+        tokenizer_name = retriever_config.get("tokenizer", "default")
+        tokenizer = None  # use default
+        if tokenizer_name == "jieba":
+            try:
+                import jieba
+                tokenizer = lambda text: list(jieba.cut(text.lower()))
+            except ImportError:
+                pass  # fallback to default
+        return BM25Retriever(tokenizer=tokenizer)
+    elif rtype == "substring":
+        return SubstringRetriever(
+            is_regex=retriever_config.get("is_regex", False),
+        )
+    else:
+        raise ValueError(f"Unsupported retriever type: {rtype}")
+
+
+def load_retrievers(config: Config, embedder: Embedder, indexer: FAISSIndexer) -> List[Retriever]:
+    """
+    Load all configured retrievers.
+
+    Returns:
+        List of Retriever instances
+    """
+    retriever_configs = config.get("retrievers", [{"type": "vector"}])
+    return [
+        load_retriever(config, rc, embedder, indexer)
+        for rc in retriever_configs
+    ]
+
+
+def load_fusion(config: Config) -> FusionStrategy:
+    """
+    Load a fusion strategy based on configuration.
+
+    Returns:
+        FusionStrategy instance
+    """
+    strategy = config.get("fusion.strategy", "weighted")
+    if strategy == "rrf":
+        return ReciprocalRankFusion(
+            k=config.get("fusion.k", 60),
+        )
+    elif strategy == "weighted":
+        return WeightedFusion(
+            weights=config.get("fusion.weights"),
+            min_score=config.get("fusion.min_score", 0.0),
+        )
+    else:
+        raise ValueError(f"Unsupported fusion strategy: {strategy}")
+
+
+def load_reranker(config: Config) -> Optional[Reranker]:
+    """
+    Load a reranker if enabled in configuration.
+
+    Returns:
+        Reranker instance or None
+    """
+    if not config.get("reranker.enabled", False):
+        return None
+
+    return CrossEncoderReranker(
+        model_name=config.get("reranker.model", "BAAI/bge-reranker-v2-m3"),
+        device=config.get("reranker.device"),
+        batch_size=config.get("reranker.batch_size", 64),
+        max_length=config.get("reranker.max_length", 512),
+        use_fp16=config.get("reranker.use_fp16", True),
+    )
+
+
 def load_query_engine(config: Config, embedder: Embedder, indexer: FAISSIndexer) -> QueryEngine:
     """
-    Load a query engine based on configuration
-    
+    Load a query engine based on configuration.
+
+    Supports:
+    - "template": Original TemplateQueryEngine (backward compatible)
+    - "hybrid": HybridQueryEngine with multi-retriever fusion
+
     Args:
         config: Configuration object
         embedder: Embedder instance
         indexer: FAISSIndexer instance
-        
+
     Returns:
         QueryEngine instance
     """
     query_engine_type = config.get("query_engine.method", "template")
-    
+
     if query_engine_type == "template":
         return TemplateQueryEngine(
             embedder=embedder,
             indexer=indexer,
             template=config.get("query_engine.template", "请帮我查找：{query}")
         )
+    elif query_engine_type == "hybrid":
+        from tinysearch.indexers.metadata_index import MetadataIndex
+        retrievers = load_retrievers(config, embedder, indexer)
+        fusion = load_fusion(config)
+        reranker = load_reranker(config)
+        filter_mode = config.get("query_engine.filter_mode", "auto")
+        metadata_index = MetadataIndex() if filter_mode != "post" else None
+        return HybridQueryEngine(
+            retrievers=retrievers,
+            fusion_strategy=fusion,
+            reranker=reranker,
+            recall_multiplier=config.get("query_engine.recall_multiplier", 2),
+            min_scores=config.get("query_engine.min_scores", None),
+            filter_multiplier=config.get("query_engine.filter_multiplier", 3),
+            metadata_index=metadata_index,
+            filter_mode=filter_mode,
+        )
     else:
         raise ValueError(f"Unsupported query engine type: {query_engine_type}")
+
+
+def _get_retriever_index_dir(index_path: Path) -> Path:
+    """Derive the retriever index directory from the FAISS index path.
+
+    FAISS saves into ``index_path.with_suffix('')`` (e.g. ``index.faiss`` →
+    ``index/``).  Non-vector retriever indexes are stored as subdirectories
+    inside the same directory so they stay together with the FAISS index.
+    """
+    return index_path.with_suffix('') if index_path.suffix else index_path
+
+
+def _build_hybrid_retriever_indexes(
+    query_engine: QueryEngine, chunks, logger=None,
+) -> None:
+    """Build BM25 / Substring / MetadataIndex when the engine is a HybridQueryEngine."""
+    if not isinstance(query_engine, HybridQueryEngine):
+        return
+    for retriever in query_engine.retrievers:
+        if isinstance(retriever, VectorRetriever):
+            continue  # already covered by FAISS indexer.build()
+        rname = type(retriever).__name__
+        if logger:
+            log_step(f"Building {rname} index")
+        retriever.build(chunks)
+
+    # Build metadata index for pre-filtering
+    if query_engine.metadata_index is not None:
+        if logger:
+            log_step("Building MetadataIndex")
+        query_engine.metadata_index.build(chunks)
+
+
+def _save_hybrid_retriever_indexes(
+    query_engine: QueryEngine, index_path: Path, logger=None,
+) -> None:
+    """Save non-vector retriever indexes and metadata index alongside the FAISS index."""
+    if not isinstance(query_engine, HybridQueryEngine):
+        return
+    index_dir = _get_retriever_index_dir(index_path)
+    for retriever in query_engine.retrievers:
+        if isinstance(retriever, VectorRetriever):
+            continue
+        rname = type(retriever).__name__.lower().replace("retriever", "")
+        rpath = index_dir / f"{rname}_index"
+        if logger:
+            log_step(f"Saving {type(retriever).__name__} index to {rpath}")
+        retriever.save(rpath)
+
+    # Save metadata index
+    if query_engine.metadata_index is not None:
+        mpath = index_dir / "metadata_index.json"
+        if logger:
+            log_step(f"Saving MetadataIndex to {mpath}")
+        query_engine.metadata_index.save(mpath)
+
+
+def _load_hybrid_retriever_indexes(
+    query_engine: QueryEngine, index_path: Path, logger=None,
+) -> None:
+    """Load non-vector retriever indexes and metadata index from alongside the FAISS index."""
+    if not isinstance(query_engine, HybridQueryEngine):
+        return
+    index_dir = _get_retriever_index_dir(index_path)
+    for retriever in query_engine.retrievers:
+        if isinstance(retriever, VectorRetriever):
+            continue
+        rname = type(retriever).__name__.lower().replace("retriever", "")
+        rpath = index_dir / f"{rname}_index"
+        if rpath.exists():
+            if logger:
+                log_step(f"Loading {type(retriever).__name__} index from {rpath}")
+            retriever.load(rpath)
+
+    # Load metadata index
+    if query_engine.metadata_index is not None:
+        mpath = index_dir / "metadata_index.json"
+        if mpath.exists():
+            if logger:
+                log_step(f"Loading MetadataIndex from {mpath}")
+            query_engine.metadata_index.load(mpath)
 
 
 def build_index(args: argparse.Namespace, config: Config) -> None:
@@ -177,15 +383,31 @@ def build_index(args: argparse.Namespace, config: Config) -> None:
     splitter = load_splitter(config)
     embedder = load_embedder(config)
     indexer = load_indexer(config)
+    query_engine = load_query_engine(config, embedder, indexer)
 
-    # Extract text from data source
+    # Extract text from data source with per-file source metadata.
+    # When args.data is a directory, process each file individually so that
+    # every text gets its actual file path as "source" — not just the
+    # directory name.  This prevents fusion dedup key collisions between
+    # chunks from different files that happen to share the same text.
     log_step("Extracting text")
-    texts = adapter.extract(args.data)
+    data_path = Path(args.data)
+    texts: list = []
+    metadata: list = []
+    adapter_type = config.get("adapter.type", "text")
+    for file_path in iter_input_files(data_path, adapter_type=adapter_type):
+        try:
+            file_texts = adapter.extract(file_path)
+        except Exception:
+            continue
+        for t in file_texts:
+            texts.append(t)
+            metadata.append({"source": str(file_path)})
     logger.info(f"📄 Extracted {len(texts)} documents")
 
     # Split text into chunks
     log_step("Splitting text into chunks")
-    chunks = splitter.split(texts)
+    chunks = splitter.split(texts, metadata)
     logger.info(f"✂️  Created {len(chunks)} text chunks")
 
     # Generate embeddings
@@ -193,14 +415,20 @@ def build_index(args: argparse.Namespace, config: Config) -> None:
     vectors = embedder.embed([chunk.text for chunk in chunks])
     logger.info(f"🧠 Generated {len(vectors)} embedding vectors")
 
-    # Build index
+    # Build FAISS index
     log_step("Building index")
     indexer.build(vectors, chunks)
 
-    # Save index
+    # Build non-vector retriever indexes (BM25, Substring) for hybrid mode
+    _build_hybrid_retriever_indexes(query_engine, chunks, logger)
+
+    # Save FAISS index
     index_path = Path(config.get("indexer.index_path", "index.faiss"))
     log_step(f"Saving index to {index_path}")
     indexer.save(index_path)
+
+    # Save non-vector retriever indexes
+    _save_hybrid_retriever_indexes(query_engine, index_path, logger)
 
     log_success("Index built successfully")
 
@@ -220,10 +448,13 @@ def query_index(args: argparse.Namespace, config: Config) -> None:
     indexer = load_indexer(config)
     query_engine = load_query_engine(config, embedder, indexer)
 
-    # Load index
+    # Load FAISS index
     index_path = Path(config.get("indexer.index_path", "index.faiss"))
     log_step(f"Loading index from {index_path}")
     indexer.load(index_path)
+
+    # Load non-vector retriever indexes (BM25, Substring) for hybrid mode
+    _load_hybrid_retriever_indexes(query_engine, index_path, logger)
 
     # Process query
     query = args.q
