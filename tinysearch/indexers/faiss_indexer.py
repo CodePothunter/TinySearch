@@ -101,10 +101,14 @@ class FAISSIndexer(VectorIndexer):
             query_vector: Query embedding vector
             top_k: Number of results to return
             candidate_ids: Optional set of chunk indices to restrict search to.
-                          When provided, over-retrieves then filters by membership.
+                          Uses FAISS IDSelectorBatch for native kernel-level filtering —
+                          only computes distances for candidate vectors (O(candidates)
+                          instead of O(total)). Requires faiss >= 1.7.4.
 
         Returns:
-            List of dictionaries containing text chunks, similarity scores, and embedding vectors
+            List of dicts with keys: text, metadata, score (higher=better), embedding.
+            For cosine/ip metrics, score is the raw inner product (cosine similarity
+            for L2-normalized vectors, range [0, 1]).
         """
         if self.index is None:
             raise ValueError("Index has not been built yet")
@@ -121,14 +125,15 @@ class FAISSIndexer(VectorIndexer):
         if self.metric == "cosine":
             faiss.normalize_L2(query_np)
 
-        # When candidate_ids is set, over-recall then filter
-        if candidate_ids is not None:
-            effective_k = min(self.index.ntotal, top_k * 3)
+        # Search index — use FAISS-native IDSelectorBatch for hard pre-filtering
+        if candidate_ids is not None and len(candidate_ids) > 0:
+            ids_array = np.array(sorted(candidate_ids), dtype=np.int64)
+            sel = faiss.IDSelectorBatch(ids_array)
+            params = faiss.SearchParameters(sel=sel)
+            effective_k = min(top_k, len(candidate_ids))
+            distances, indices = self.index.search(query_np, effective_k, params=params)
         else:
-            effective_k = top_k
-
-        # Search index
-        distances, indices = self.index.search(query_np, effective_k)
+            distances, indices = self.index.search(query_np, top_k)
 
         # Convert to result format
         results = []
@@ -138,19 +143,13 @@ class FAISSIndexer(VectorIndexer):
             # Skip invalid indices (can happen if there are fewer results than top_k)
             if idx < 0 or idx >= len(self.texts):
                 continue
-            # Pre-filter: skip if not in candidate set
-            if candidate_ids is not None and idx not in candidate_ids:
-                continue
             # Map to original text chunk
             text_idx = self.ids_map[idx]
             text_chunk = self.texts[text_idx]
-            # Convert distance to similarity score
+            # Convert to similarity score (higher = better)
             if self.metric == "cosine" or self.metric == "ip":
-                # For cosine and inner product, higher is better, and maximum is 1
+                # IndexFlatIP returns inner product; for normalized vectors this IS cosine similarity
                 similarity = float(distance)
-                if self.metric == "cosine":
-                    # Cosine distance in FAISS is actually 1 - cosine similarity
-                    similarity = 1 - similarity
             else:
                 # For L2, lower is better, so invert and normalize roughly
                 similarity = 1.0 / (1.0 + float(distance))
@@ -162,8 +161,6 @@ class FAISSIndexer(VectorIndexer):
                 "score": similarity,
                 "embedding": embedding
             })
-            if candidate_ids is not None and len(results) >= top_k:
-                break
         return results
     
     def save(self, path: Union[str, Path]) -> None:

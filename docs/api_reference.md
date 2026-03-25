@@ -355,6 +355,16 @@ indexer.build(vectors, chunks)
 # Search index
 results = indexer.search(query_vector, top_k=5)
 
+# Search with candidate pre-filtering (uses FAISS IDSelectorBatch)
+# Only computes distances for candidate vectors — O(candidates) not O(total)
+candidate_ids = {10, 25, 42, 100}  # e.g., from MetadataIndex.lookup()
+results = indexer.search(query_vector, top_k=5, candidate_ids=candidate_ids)
+
+# Score semantics:
+#   cosine/ip metric: score = inner product (= cosine similarity for normalized vectors)
+#   l2 metric: score = 1 / (1 + distance)
+# All scores: higher = more similar
+
 # Save/load index
 indexer.save("path/to/index.faiss")
 indexer.load("path/to/index.faiss")

@@ -137,6 +137,26 @@ flow_controller.start_hot_update(
 flow_controller.stop_hot_update()
 ```
 
+## 向量预过滤优化
+
+### FAISS IDSelectorBatch 原生预过滤
+
+当 `candidate_ids`（来自 MetadataIndex 的结构化过滤结果）传入 FAISSIndexer 时，使用 FAISS 原生的 `IDSelectorBatch` + `SearchParameters` 限制搜索空间，而非全局搜索后再过滤。
+
+**优势**：
+- 时间复杂度从 O(总文档数) 降至 O(候选集大小)
+- 高选择性过滤（如 525/44601 = 1.2%）命中率从 ≈0 变为 100%
+- 需要 faiss >= 1.7.4
+
+### BM25 选择性比例召回
+
+bm25s 库不支持原生候选集限制。改为按选择性比例动态调整召回量：
+`effective_k = top_k × max(3, 总文档数 / 候选集大小)`
+
+### 余弦相似度评分
+
+FAISSIndexer 使用 `IndexFlatIP`（内积索引）+ L2 归一化向量。`index.search()` 返回的值即为余弦相似度（越高越相似），直接作为 score 返回，确保与 WeightedFusion（假设 higher=better）的 min-max 归一化兼容。
+
 ## 下一步计划
 
 随着这些功能的实现，TinySearch现在是一个更加健壮和灵活的向量检索系统。未来的开发将集中在：
@@ -145,4 +165,4 @@ flow_controller.stop_hot_update()
 2. 常见用例的示例配置
 3. 性能监控和优化
 4. 高级重排序以改进搜索结果
-5. 结合向量和基于关键词的混合搜索功能 
+5. 结合向量和基于关键词的混合搜索功能

@@ -137,6 +137,26 @@ flow_controller.start_hot_update(
 flow_controller.stop_hot_update()
 ```
 
+## Vector Pre-filtering Optimization
+
+### FAISS IDSelectorBatch Native Pre-filtering
+
+When `candidate_ids` (from MetadataIndex structured filtering) is passed to FAISSIndexer, it uses FAISS-native `IDSelectorBatch` + `SearchParameters` to restrict the search space at the kernel level, rather than over-recalling globally and post-filtering.
+
+**Benefits**:
+- Time complexity drops from O(total_docs) to O(candidates)
+- High-selectivity filters (e.g., 525/44601 = 1.2%) go from ≈0% hit rate to 100%
+- Requires faiss >= 1.7.4
+
+### BM25 Selectivity-Proportional Recall
+
+bm25s doesn't support native candidate restriction. Instead, effective_k scales proportionally with selectivity:
+`effective_k = top_k × max(3, total_docs / candidate_count)`
+
+### Cosine Similarity Scoring
+
+FAISSIndexer uses `IndexFlatIP` (inner product index) with L2-normalized vectors. `index.search()` returns raw inner product values which equal cosine similarity (higher = more similar). These are returned directly as scores, ensuring compatibility with WeightedFusion's min-max normalization (which assumes higher = better).
+
 ## Next Steps
 
 With these features implemented, TinySearch is now a more robust and flexible vector retrieval system. Future development will focus on:
@@ -145,4 +165,4 @@ With these features implemented, TinySearch is now a more robust and flexible ve
 2. Example configurations for common use cases
 3. Performance monitoring and optimization
 4. Advanced reranking for improved search results
-5. Hybrid search capabilities combining vector and keyword-based approaches 
+5. Hybrid search capabilities combining vector and keyword-based approaches

@@ -355,6 +355,16 @@ indexer.build(vectors, chunks)
 # 搜索索引
 results = indexer.search(query_vector, top_k=5)
 
+# 带候选集预过滤搜索（使用 FAISS IDSelectorBatch）
+# 仅对候选向量计算距离 — O(候选集) 而非 O(总文档)
+candidate_ids = {10, 25, 42, 100}  # 例如来自 MetadataIndex.lookup()
+results = indexer.search(query_vector, top_k=5, candidate_ids=candidate_ids)
+
+# 评分语义：
+#   cosine/ip: score = 内积（归一化向量 = 余弦相似度）
+#   l2: score = 1 / (1 + 距离)
+# 所有评分: 越高越相似
+
 # 保存/加载索引
 indexer.save("path/to/index.faiss")
 indexer.load("path/to/index.faiss")

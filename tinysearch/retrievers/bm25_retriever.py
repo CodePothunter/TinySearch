@@ -92,7 +92,11 @@ class BM25Retriever(Retriever):
             query: Query string
             top_k: Number of results to return
             **kwargs:
-                candidate_ids: Optional Set[int] of chunk indices to restrict search to
+                candidate_ids: Optional Set[int] of chunk indices to restrict search to.
+                    bm25s doesn't support native candidate restriction, so we use
+                    selectivity-proportional over-recall: effective_k = top_k * (total/candidates).
+                    For example, 525 candidates in 44k corpus → effective_k ≈ top_k * 85,
+                    ensuring the post-filter has enough coverage.
         """
         if self._index is None:
             return []
@@ -104,9 +108,10 @@ class BM25Retriever(Retriever):
         if not query_tokens:
             return []
 
-        # When pre-filtering, over-recall then filter by candidate_ids
+        # When pre-filtering, recall proportional to selectivity
         if candidate_ids is not None:
-            effective_k = min(len(self._chunks), top_k * 3)
+            ratio = len(self._chunks) / max(len(candidate_ids), 1)
+            effective_k = min(len(self._chunks), int(top_k * max(3, ratio)))
         else:
             effective_k = min(top_k, len(self._chunks))
         if effective_k == 0:
