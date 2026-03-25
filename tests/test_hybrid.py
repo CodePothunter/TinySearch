@@ -616,3 +616,131 @@ class TestPreFilter:
         )
         results = engine.retrieve("编程", top_k=5, filters={"grade": "不存在"})
         assert results == []
+
+
+# ── Fusion source attribution ─────────────────────────────
+
+class TestFusionSourceAttribution:
+    """Tests for retrieval_method, scores_normalized, and fusion_score fields."""
+
+    def _make_results(self, method, items):
+        """Helper: create a retriever result list."""
+        return [
+            {"text": text, "metadata": meta, "score": score, "retrieval_method": method}
+            for text, meta, score in items
+        ]
+
+    # -- retrieval_method --
+
+    def test_weighted_retrieval_method_single_source(self):
+        """Doc found by only one retriever should be labelled with that method."""
+        r_bm25 = self._make_results("bm25", [("doc A", {"source": "a"}, 10.0)])
+        r_vec = self._make_results("vector", [("doc B", {"source": "b"}, 0.8)])
+        fused = WeightedFusion([0.5, 0.5]).fuse([r_bm25, r_vec])
+        by_text = {r["text"]: r for r in fused}
+        assert by_text["doc A"]["retrieval_method"] == "bm25"
+        assert by_text["doc B"]["retrieval_method"] == "vector"
+
+    def test_weighted_retrieval_method_hybrid(self):
+        """Doc found by both retrievers should be 'hybrid'."""
+        r_bm25 = self._make_results("bm25", [("doc A", {"source": "a"}, 10.0)])
+        r_vec = self._make_results("vector", [("doc A", {"source": "a"}, 0.8)])
+        fused = WeightedFusion([0.5, 0.5]).fuse([r_bm25, r_vec])
+        assert fused[0]["retrieval_method"] == "hybrid"
+
+    def test_rrf_retrieval_method_single_source(self):
+        """RRF: doc found by only one retriever should be labelled with that method."""
+        r_bm25 = self._make_results("bm25", [("doc A", {"source": "a"}, 10.0)])
+        r_vec = self._make_results("vector", [("doc B", {"source": "b"}, 0.8)])
+        fused = ReciprocalRankFusion(k=60).fuse([r_bm25, r_vec])
+        by_text = {r["text"]: r for r in fused}
+        assert by_text["doc A"]["retrieval_method"] == "bm25"
+        assert by_text["doc B"]["retrieval_method"] == "vector"
+
+    def test_rrf_retrieval_method_hybrid(self):
+        """RRF: doc found by both retrievers should be 'hybrid'."""
+        r_bm25 = self._make_results("bm25", [("doc A", {"source": "a"}, 10.0)])
+        r_vec = self._make_results("vector", [("doc A", {"source": "a"}, 0.8)])
+        fused = ReciprocalRankFusion(k=60).fuse([r_bm25, r_vec])
+        assert fused[0]["retrieval_method"] == "hybrid"
+
+    # -- fusion_score --
+
+    def test_weighted_fusion_score_equals_score(self):
+        """fusion_score should always equal score."""
+        r1 = self._make_results("bm25", [("doc A", {"source": "a"}, 5.0)])
+        r2 = self._make_results("vector", [("doc A", {"source": "a"}, 0.9)])
+        fused = WeightedFusion([0.6, 0.4]).fuse([r1, r2])
+        for r in fused:
+            assert "fusion_score" in r
+            assert r["fusion_score"] == r["score"]
+
+    def test_rrf_fusion_score_equals_score(self):
+        """RRF fusion_score should always equal score."""
+        r1 = self._make_results("bm25", [("doc A", {"source": "a"}, 5.0)])
+        r2 = self._make_results("vector", [("doc A", {"source": "a"}, 0.9)])
+        fused = ReciprocalRankFusion(k=60).fuse([r1, r2])
+        for r in fused:
+            assert "fusion_score" in r
+            assert r["fusion_score"] == r["score"]
+
+    # -- scores_normalized --
+
+    def test_weighted_scores_normalized_range(self):
+        """Normalized scores should be in [0, 1]."""
+        r_bm25 = self._make_results("bm25", [
+            ("doc A", {"source": "a"}, 20.0),
+            ("doc B", {"source": "b"}, 5.0),
+        ])
+        r_vec = self._make_results("vector", [
+            ("doc A", {"source": "a"}, 0.9),
+            ("doc C", {"source": "c"}, 0.3),
+        ])
+        fused = WeightedFusion([0.5, 0.5]).fuse([r_bm25, r_vec])
+        for r in fused:
+            assert "scores_normalized" in r
+            for method, ns in r["scores_normalized"].items():
+                assert 0.0 <= ns <= 1.0, f"{method} norm score {ns} out of range"
+
+    def test_rrf_scores_normalized_range(self):
+        """RRF normalized scores should be in [0, 1]."""
+        r_bm25 = self._make_results("bm25", [
+            ("doc A", {"source": "a"}, 20.0),
+            ("doc B", {"source": "b"}, 5.0),
+        ])
+        r_vec = self._make_results("vector", [
+            ("doc A", {"source": "a"}, 0.9),
+            ("doc C", {"source": "c"}, 0.3),
+        ])
+        fused = ReciprocalRankFusion(k=60).fuse([r_bm25, r_vec])
+        for r in fused:
+            assert "scores_normalized" in r
+            for method, ns in r["scores_normalized"].items():
+                assert 0.0 <= ns <= 1.0, f"{method} norm score {ns} out of range"
+
+    def test_weighted_scores_normalized_keys_match_scores(self):
+        """scores_normalized should have exactly the same keys as scores."""
+        r1 = self._make_results("bm25", [("doc A", {"source": "a"}, 10.0)])
+        r2 = self._make_results("vector", [("doc A", {"source": "a"}, 0.8)])
+        fused = WeightedFusion([0.5, 0.5]).fuse([r1, r2])
+        for r in fused:
+            assert set(r["scores_normalized"].keys()) == set(r["scores"].keys())
+
+    # -- backward compatibility: scores and score still present --
+
+    def test_backward_compat_fields_present(self):
+        """All legacy fields (text, metadata, score, scores) still present."""
+        r1 = self._make_results("bm25", [("doc A", {"source": "a"}, 10.0)])
+        fused = WeightedFusion().fuse([r1])
+        r = fused[0]
+        assert all(k in r for k in ("text", "metadata", "score", "scores"))
+
+    # -- integration: HybridQueryEngine end-to-end --
+
+    def test_hybrid_engine_output_has_new_fields(self, hybrid_engine):
+        """End-to-end: results from HybridQueryEngine should carry new fields."""
+        results = hybrid_engine.retrieve("编程", top_k=5)
+        for r in results:
+            assert "fusion_score" in r
+            assert "scores_normalized" in r
+            assert r["retrieval_method"] in ("bm25", "vector", "hybrid", "substring")

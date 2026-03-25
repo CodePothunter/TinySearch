@@ -75,6 +75,7 @@ class WeightedFusion(FusionStrategy):
         doc_scores: Dict[str, float] = defaultdict(float)
         best_result: Dict[str, Dict[str, Any]] = {}
         per_method_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
+        per_method_norm_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
 
         for i, (result_list, weight) in enumerate(zip(normalized_lists, weights)):
             for result in result_list:
@@ -83,6 +84,7 @@ class WeightedFusion(FusionStrategy):
 
                 method = result.get("retrieval_method", "unknown")
                 per_method_scores[doc_key][method] = result.get("score", 0.0)
+                per_method_norm_scores[doc_key][method] = result["_norm_score"]
 
                 if doc_key not in best_result:
                     best_result[doc_key] = result
@@ -93,12 +95,16 @@ class WeightedFusion(FusionStrategy):
             if fusion_score < self.min_score:
                 continue
             base = best_result[doc_key]
+            sources = list(per_method_scores[doc_key].keys())
+            retrieval_method = sources[0] if len(sources) == 1 else "hybrid"
             fused.append({
                 "text": base["text"],
                 "metadata": base.get("metadata", {}),
                 "score": fusion_score,
-                "retrieval_method": "hybrid",
+                "fusion_score": fusion_score,
+                "retrieval_method": retrieval_method,
                 "scores": per_method_scores[doc_key],
+                "scores_normalized": per_method_norm_scores[doc_key],
             })
 
         fused.sort(key=lambda x: x["score"], reverse=True)

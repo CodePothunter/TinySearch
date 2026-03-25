@@ -54,16 +54,36 @@ class ReciprocalRankFusion(FusionStrategy):
                 if doc_key not in best_result or result.get("score", 0) > best_result[doc_key].get("score", 0):
                     best_result[doc_key] = result
 
+        # Compute per-method normalized scores (min-max over raw scores)
+        per_method_norm_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
+        # Collect all raw scores grouped by method
+        method_all_scores: Dict[str, list] = defaultdict(list)
+        for doc_key, method_scores in per_method_scores.items():
+            for method, score in method_scores.items():
+                method_all_scores[method].append((doc_key, score))
+        # Min-max normalize per method
+        for method, entries in method_all_scores.items():
+            scores = [s for _, s in entries]
+            min_s = min(scores)
+            max_s = max(scores)
+            range_s = max_s - min_s if max_s != min_s else 1.0
+            for doc_key, score in entries:
+                per_method_norm_scores[doc_key][method] = (score - min_s) / range_s
+
         # Build fused results
         fused = []
         for doc_key, rrf_score in rrf_scores.items():
             base = best_result[doc_key]
+            sources = list(per_method_scores[doc_key].keys())
+            retrieval_method = sources[0] if len(sources) == 1 else "hybrid"
             fused.append({
                 "text": base["text"],
                 "metadata": base.get("metadata", {}),
                 "score": rrf_score,
-                "retrieval_method": "hybrid",
+                "fusion_score": rrf_score,
+                "retrieval_method": retrieval_method,
                 "scores": per_method_scores[doc_key],
+                "scores_normalized": per_method_norm_scores[doc_key],
             })
 
         # Sort by fused score descending
